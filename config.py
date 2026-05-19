@@ -10,6 +10,7 @@ DEFAULT_CONFIG = {
     "popup_height": 200,
     "popup_expanded_height": 500,
     "max_items_per_check": 3,
+    "primary_subject": "",
 }
 
 

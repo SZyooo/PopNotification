@@ -31,6 +31,7 @@ class EditorWindow:
 
         self._build_ui()
         self._refresh_tree()
+        self._refresh_primary_subjects()
 
         self.root.bind("<Control-s>", lambda e: self._save_keyword())
         self.root.bind("<Control-S>", lambda e: self._save_keyword())
@@ -126,6 +127,20 @@ class EditorWindow:
         self.empty_label.pack(expand=True)
 
         self.form_frame = tk.Frame(self.form_container, bg="#fafafa")
+
+        tk.Label(self.form_frame, text="主要复习科目", font=("Microsoft YaHei", 10, "bold"),
+                 bg="#fafafa").pack(anchor=tk.W, pady=(4, 0))
+        subject_frame = tk.Frame(self.form_frame, bg="#fafafa")
+        subject_frame.pack(fill=tk.X, pady=(2, 6))
+        self.primary_subject_var = tk.StringVar(value="")
+        self.primary_subject_combo = ttk.Combobox(
+            subject_frame, textvariable=self.primary_subject_var,
+            font=("Microsoft YaHei", 10), state="readonly", width=30
+        )
+        self.primary_subject_combo.pack(side=tk.LEFT)
+        self.primary_subject_combo.bind("<<ComboboxSelected>>", self._on_primary_subject_changed)
+        tk.Button(subject_frame, text="刷新列表", font=("Microsoft YaHei", 8),
+                  command=self._refresh_primary_subjects).pack(side=tk.LEFT, padx=(6, 0))
 
         tk.Label(self.form_frame, text="关键词", font=("Microsoft YaHei", 10, "bold"),
                  bg="#fafafa").pack(anchor=tk.W, pady=(4, 0))
@@ -273,6 +288,7 @@ class EditorWindow:
                 for kw in self.db.list_keywords(subject, chapter):
                     self.tree.insert(cid, tk.END, text=f"💡 {kw}",
                                      values=("keyword",))
+        self._refresh_primary_subjects()
 
     def _on_tree_scroll(self, first, last):
         self.tree_scrollbar.set(first, last)
@@ -403,6 +419,24 @@ class EditorWindow:
                         self.tree.selection_set(grand)
                         self.tree.see(grand)
                         return
+
+    def _refresh_primary_subjects(self):
+        from config import load_config
+        subjects = [""] + self.db.list_subjects()
+        self.primary_subject_combo["values"] = subjects
+        display = {"": "全部科目"}
+        for s in subjects:
+            display[s] = s if s else "全部科目"
+        current = load_config().get("primary_subject", "")
+        if current not in subjects and current != "":
+            current = ""
+        self.primary_subject_var.set(current)
+
+    def _on_primary_subject_changed(self, event):
+        from config import load_config, save_config
+        cfg = load_config()
+        cfg["primary_subject"] = self.primary_subject_var.get()
+        save_config(cfg)
 
     def _add_subject_dialog(self):
         dialog = tk.Toplevel(self.root)

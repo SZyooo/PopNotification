@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PopNotification — 知识卡片弹窗提醒</title>
+<style>
+body { font-family: "Microsoft YaHei", sans-serif; max-width: 800px; margin: 30px auto; padding: 0 20px; color: #333; line-height: 1.7; }
+h1 { border-bottom: 2px solid #3498db; padding-bottom: 8px; color: #2c3e50; }
+h2 { color: #2980b9; margin-top: 28px; border-left: 4px solid #3498db; padding-left: 10px; }
+h3 { color: #555; }
+code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: Consolas, monospace; font-size: 0.9em; }
+pre { background: #f8f8f8; padding: 12px; border-radius: 5px; overflow-x: auto; border: 1px solid #e0e0e0; }
+table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+th { background: #f0f7ff; }
+ul { padding-left: 20px; }
+li { margin: 4px 0; }
+.note { background: #fff3cd; border-left: 4px solid #ffc107; padding: 10px 14px; margin: 14px 0; border-radius: 3px; }
+.ok { background: #d4edda; border-left: 4px solid #28a745; padding: 10px 14px; margin: 14px 0; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>📖 PopNotification — 知识卡片弹窗提醒</h1>
+<p>定时弹出知识卡片，帮助巩固记忆。支持遗忘曲线复习策略。</p>
+
+<hr>
+
+<h2>快速开始</h2>
+<pre><code>rem 1. 安装 Python 环境 + 依赖
+install.bat
+
+rem 2. 添加开机自启（可选）
+add_to_startup.bat
+
+rem 3. 启动程序
+启动.bat</code></pre>
+
+<div class="note">启动后右下角会出现蓝色图标，右键可打开编辑器、立即检查、切换复习科目。</div>
+
+<h2>首次使用</h2>
+<ol>
+  <li>运行 <code>启动.bat</code>，弹出对话框询问<strong>知识数据库根路径</strong>，选择一个文件夹用于存放知识卡片（也可用默认路径）</li>
+  <li>询问是否启动后台提醒：
+    <ul>
+      <li><strong>是</strong> — 后台运行，定时弹出知识卡片</li>
+      <li><strong>否</strong> — 仅打开编辑器，管理知识内容</li>
+    </ul>
+  </li>
+  <li>在编辑器中添加学科 → 章节 → 关键词，填写知识内容</li>
+</ol>
+
+<h2>主要功能</h2>
+
+<h3>编辑器</h3>
+<p>右键点击系统托盘图标 → 「打开编辑器」或双击托盘图标。</p>
+<p>左侧树形结构管理学科/章节/关键词，右侧编辑卡片内容：</p>
+<ul>
+  <li><strong>关键词</strong> — 卡片标题</li>
+  <li><strong>知识内容</strong> — 支持行内标记语法</li>
+  <li><strong>整卡格式</strong> — 普通 / 提示 / 警告</li>
+  <li><strong>主要复习科目</strong> — 限定只弹出某一学科的卡片</li>
+</ul>
+<p>快捷键：<code>Ctrl + S</code> 保存</p>
+
+<h3>行内标记语法</h3>
+<table>
+  <tr><th>标记</th><th>效果</th></tr>
+  <tr><td><code>**加粗**</code></td><td>蓝色强调</td></tr>
+  <tr><td><code>!!警告!!</code></td><td>红色重要</td></tr>
+  <tr><td><code>??提示??</code></td><td>绿色提示</td></tr>
+</table>
+
+<h3>遗忘曲线复习</h3>
+<p>每张卡片有 6 个记忆等级（0~5），每次弹出时：</p>
+<ul>
+  <li><strong>认识了</strong> → 等级 +1，间隔翻倍延长</li>
+  <li><strong>没认出</strong> → 等级归零，下次短间隔复习</li>
+</ul>
+
+<h2>开机自启</h2>
+<p>运行 <code>add_to_startup.bat</code>，添加到 Windows 启动项。</p>
+<p>或手动添加：将 <code>启动.vbs</code> 的快捷方式放入 <code>%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\</code></p>
+
+<h2>项目文件说明</h2>
+<table>
+  <tr><th>文件</th><th>说明</th></tr>
+  <tr><td><code>启动.bat</code></td><td>启动程序（有控制台窗口）</td></tr>
+  <tr><td><code>启动.vbs</code></td><td>静默启动（无窗口，推荐开机用）</td></tr>
+  <tr><td><code>main.py</code></td><td>入口：选择后台模式或仅编辑器</td></tr>
+  <tr><td><code>notifier.py</code></td><td>后台通知 + 系统托盘</td></tr>
+  <tr><td><code>editor.py</code></td><td>知识卡片编辑器</td></tr>
+  <tr><td><code>popup_window.py</code></td><td>弹窗界面</td></tr>
+  <tr><td><code>db.py</code></td><td>知识数据库读写</td></tr>
+  <tr><td><code>memory.py</code></td><td>遗忘曲线复习算法</td></tr>
+  <tr><td><code>config.py</code></td><td>配置读写</td></tr>
+  <tr><td><code>install.bat</code></td><td>自动安装 Python + 依赖</td></tr>
+  <tr><td><code>add_to_startup.bat</code> / <code>.py</code></td><td>添加开机自启</td></tr>
+  <tr><td><code>requirements.txt</code></td><td>Python 依赖清单</td></tr>
+</table>
+
+<h2>依赖</h2>
+<ul>
+  <li>Python ≥ 3.8</li>
+  <li>pystray — 系统托盘图标</li>
+  <li>Pillow — 托盘图标绘制</li>
+</ul>
+
+</body>
+</html>

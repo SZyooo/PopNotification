@@ -79,7 +79,12 @@ class KnowledgeBase:
         items = []
         for f in os.listdir(path):
             if f.endswith(".json") and os.path.isfile(os.path.join(path, f)):
-                kw = f[:-5]
+                try:
+                    with open(os.path.join(path, f), "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                    kw = data.get("keyword", f[:-5])
+                except Exception:
+                    kw = f[:-5]
                 items.append(kw)
         return sorted(items)
 

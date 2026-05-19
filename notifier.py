@@ -3,6 +3,7 @@ import os
 import threading
 import queue
 import time
+from datetime import datetime
 
 from db import KnowledgeBase
 from config import load_config
@@ -19,10 +20,13 @@ class Notifier:
         cfg = load_config()
         self.db = KnowledgeBase(cfg.get("root_path", ""))
         self.check_interval_ms = max(60000, cfg.get("check_interval_minutes", 5) * 60000)
-        self.max_per_check = cfg.get("max_items_per_check", 3)
+        self._primary_subject = cfg.get("primary_subject", "")
 
         self.active_popups = []
         self.suppressed_items = set()
+        self._active_item_keys = set()
+        self._today_date = datetime.now().date()
+        self._today_popup_counts = {}
         self.running = True
         self._editor_window = None
         self._tray_icon = None
@@ -66,9 +70,27 @@ class Notifier:
                 self._cmd_queue.put(self._quit_app)
                 icon.stop()
 
+            def set_subject(subj):
+                def action(icon, item):
+                    self._cmd_queue.put(lambda: self._set_primary_subject(subj))
+                return action
+
+            def build_subject_items():
+                items = [pystray.MenuItem(
+                    "全部科目", set_subject(""),
+                    checked=lambda item: self._primary_subject == ""
+                )]
+                for s in self.db.list_subjects():
+                    items.append(pystray.MenuItem(
+                        s, set_subject(s),
+                        checked=lambda item, sub=s: self._primary_subject == sub
+                    ))
+                return items
+
             menu = pystray.Menu(
                 pystray.MenuItem("打开编辑器", on_open),
                 pystray.MenuItem("立即检查", on_check),
+                pystray.MenuItem("复习科目", pystray.Menu(build_subject_items)),
                 pystray.MenuItem("统计信息", on_stats),
                 pystray.MenuItem("退出", on_quit),
             )
@@ -130,21 +152,77 @@ class Notifier:
                 pass
         self.root.after(2000, self._update_tray_tooltip)
 
+    def _set_primary_subject(self, subject):
+        self._primary_subject = subject
+        from config import save_config
+        cfg = load_config()
+        cfg["primary_subject"] = subject
+        save_config(cfg)
+
     def _check_now(self, silent=False):
         try:
+            self._ensure_date_reset()
             items = self.db.get_all_due_items()
-            new_items = [it for it in items if it["keyword"] not in self.suppressed_items]
-            if new_items:
-                self._show_popups(new_items)
+            if self._primary_subject:
+                items = [it for it in items if it["subject"] == self._primary_subject]
+            candidates = [
+                it for it in items
+                if it["keyword"] not in self.suppressed_items
+                and (it["subject"], it["chapter"], it["keyword"]) not in self._active_item_keys
+            ]
+            best = self._pick_best(candidates)
+            if best:
+                key = (best["subject"], best["chapter"], best["keyword"])
+                self._today_popup_counts[key] = self._today_popup_counts.get(key, 0) + 1
+                self.root.after(0, lambda it=best: self._create_popup(it))
                 if not silent:
-                    self._show_balloon(f"弹出 {min(len(new_items), self.max_per_check)} 条知识卡片")
+                    msg = f"弹出知识卡片: {best['keyword']}"
+                    cnt = self._today_popup_counts[key]
+                    if cnt > 1:
+                        msg += f" (今日第{cnt}次)"
+                    self._show_balloon(msg)
             elif not silent:
                 if not items:
                     self._show_balloon("当前没有到期的知识卡片")
                 else:
                     self._show_balloon(f"找到 {len(items)} 条，但已被临时忽略")
         except Exception:
-            pass
+            import traceback
+            traceback.print_exc()
+
+    def _ensure_date_reset(self):
+        today = datetime.now().date()
+        if today != self._today_date:
+            self._today_date = today
+            self._today_popup_counts.clear()
+
+    def _pick_best(self, items):
+        if not items:
+            return None
+
+        def score(item):
+            level = item.get("memory", {}).get("level", 0)
+            key = (item["subject"], item["chapter"], item["keyword"])
+
+            # 记忆等级越低越优先 (0=最优先, 5=最不优先)
+            level_score = 5 - level
+
+            # 距上次复习时间加分
+            last = item.get("memory", {}).get("last_review")
+            time_bonus = 0.0
+            if last:
+                try:
+                    hrs = (datetime.now() - datetime.fromisoformat(last)).total_seconds() / 3600
+                    time_bonus = min(hrs / 24, 3.0)
+                except Exception:
+                    pass
+
+            # 今日已弹次数扣分
+            pop_penalty = self._today_popup_counts.get(key, 0) * 3
+
+            return level_score + time_bonus - pop_penalty
+
+        return max(items, key=score)
 
     def _show_balloon(self, msg):
         if self._tray_icon:
@@ -153,14 +231,11 @@ class Notifier:
             except Exception:
                 pass
 
-    def _show_popups(self, items):
-        count = min(len(items), self.max_per_check)
-        for i in range(count):
-            delay = i * 3000 if count > 1 else 0
-            self.root.after(delay, lambda it=items[i]: self._create_popup(it))
-
     def _create_popup(self, item):
-        popup = show_popup(self.root, item, self._on_review, self._on_popup_close)
+        item_key = (item["subject"], item["chapter"], item["keyword"])
+        self._active_item_keys.add(item_key)
+        popup = show_popup(self.root, item, self._on_review,
+                           lambda: self._on_popup_close(item_key))
         self.active_popups.append(popup)
 
     def _on_review(self, item_data, new_mem, action):
@@ -170,7 +245,8 @@ class Notifier:
         except Exception:
             pass
 
-    def _on_popup_close(self):
+    def _on_popup_close(self, item_key):
+        self._active_item_keys.discard(item_key)
         self.active_popups = [p for p in self.active_popups if p is not None]
 
     def _open_editor(self):
