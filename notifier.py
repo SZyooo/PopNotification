@@ -89,15 +89,14 @@ class Notifier:
                 return items
 
             menu = pystray.Menu(
-                pystray.MenuItem("打开编辑器", on_open),
+                pystray.MenuItem("打开编辑器", on_open, default=True),
                 pystray.MenuItem("立即检查", on_check),
                 pystray.MenuItem("复习科目", pystray.Menu(build_subject_items)),
                 pystray.MenuItem("统计信息", on_stats),
                 pystray.MenuItem("退出", on_quit),
             )
 
-            self._tray_icon = pystray.Icon("PopNotification", img, "知识提醒", menu,
-                                           on_double_click=lambda icon: self._cmd_queue.put(self._open_editor))
+            self._tray_icon = pystray.Icon("PopNotification", img, "知识提醒", menu)
             t = threading.Thread(target=self._tray_icon.run, daemon=True)
             t.start()
 
