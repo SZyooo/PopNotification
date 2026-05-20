@@ -180,6 +180,7 @@ class Notifier:
                     self.root.after(10000, self._clear_tray_status)
                     return
                 key = (best["subject"], best["chapter"], best["keyword"])
+                self._active_item_keys.add(key)
                 self._today_popup_counts[key] = self._today_popup_counts.get(key, 0) + 1
                 self.root.after(0, lambda it=best: self._create_popup(it))
                 cnt = self._today_popup_counts[key]

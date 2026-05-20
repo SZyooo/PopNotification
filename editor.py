@@ -34,6 +34,9 @@ class EditorWindow:
         self._editing_type = None
         self._read_mode = False
         self._suppress_tree_select = False
+        self._preview_popup = None
+        self._search_after_id = None
+        self.search_var = tk.StringVar(value="")
         self._build_ui()
         self._refresh_tree()
         self._refresh_primary_subjects()
@@ -66,6 +69,21 @@ class EditorWindow:
 
         tk.Label(left_frame, text="知识结构", font=("Microsoft YaHei", 11, "bold"),
                  anchor=tk.W).pack(fill=tk.X, pady=(4, 2))
+
+        search_frame = tk.Frame(left_frame)
+        search_frame.pack(fill=tk.X, pady=(0, 2), padx=2)
+        tk.Label(search_frame, text="🔍", font=("Microsoft YaHei", 9),
+                 fg="#999").pack(side=tk.LEFT, padx=(0, 2))
+        self.search_entry = tk.Entry(
+            search_frame, textvariable=self.search_var,
+            font=("Microsoft YaHei", 9), relief=tk.SUNKEN, bd=1
+        )
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.search_entry.bind("<KeyRelease>", self._on_search_changed)
+        search_clear = tk.Label(search_frame, text="✕",
+                                font=("Microsoft YaHei", 9), fg="#999", cursor="hand2")
+        search_clear.pack(side=tk.RIGHT, padx=(2, 0))
+        search_clear.bind("<Button-1>", self._clear_search)
 
         tree_frame = tk.Frame(left_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -203,7 +221,7 @@ class EditorWindow:
             lbl = tk.Label(self.kw_legend_frame, text=f"  {tag}={desc}",
                            font=("Microsoft YaHei", 8), fg=fg, bg="#fafafa")
             lbl.pack(side=tk.LEFT, padx=(0, 6))
-        lbl2 = tk.Label(self.kw_legend_frame, text="  -列表=列表",
+        lbl2 = tk.Label(self.kw_legend_frame, text="  -列表=列表   ```代码块```=代码",
                         font=("Microsoft YaHei", 8), fg="#8e44ad", bg="#fafafa")
         lbl2.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -409,17 +427,72 @@ class EditorWindow:
         return frame
 
     def _refresh_tree(self):
+        query = self.search_var.get().strip().lower() if hasattr(self, 'search_var') else ""
         self.tree.delete(*self.tree.get_children())
         for subject in self.db.list_subjects():
-            sid = self.tree.insert("", tk.END, text=f"📚 {subject}",
-                                    values=("subject",), open=True)
-            for chapter in self.db.list_chapters(subject):
-                cid = self.tree.insert(sid, tk.END, text=f"📖 {chapter}",
-                                       values=("chapter",), open=True)
-                for kw in self.db.list_keywords(subject, chapter):
-                    self.tree.insert(cid, tk.END, text=f"💡 {kw}",
-                                     values=("keyword",))
+            subject_match = not query or query in subject.lower()
+            chapters = self.db.list_chapters(subject)
+            chapter_data = []
+            has_visible = False
+            for chapter in chapters:
+                chapter_match = not query or query in chapter.lower()
+                keywords = self.db.list_keywords(subject, chapter)
+                visible_kws = keywords if (chapter_match or not query) else [kw for kw in keywords if query in kw.lower()]
+                if visible_kws:
+                    has_visible = True
+                    chapter_data.append((chapter, visible_kws))
+            if subject_match or has_visible:
+                sid = self.tree.insert("", tk.END, text=f"📚 {subject}",
+                                        values=("subject",), open=True)
+                for chapter, visible_kws in chapter_data:
+                    cid = self.tree.insert(sid, tk.END, text=f"📖 {chapter}",
+                                           values=("chapter",), open=True)
+                    for kw in visible_kws:
+                        self.tree.insert(cid, tk.END, text=f"💡 {kw}",
+                                         values=("keyword",))
         self._refresh_primary_subjects()
+
+    def _on_search_changed(self, event=None):
+        if self._search_after_id is not None:
+            self.root.after_cancel(self._search_after_id)
+        self._search_after_id = self.root.after(200, self._do_filter_tree)
+
+    def _do_filter_tree(self):
+        self._search_after_id = None
+        sel = self.tree.selection()
+        sel_key = None
+        if sel:
+            vals = self.tree.item(sel[0], "values")
+            if vals:
+                sel_key = (vals[0], self._strip_emoji(self.tree.item(sel[0], "text")))
+        self._refresh_tree()
+        if sel_key:
+            self._select_tree_item(sel_key)
+
+    def _select_tree_item(self, key):
+        typ, name = key
+        for item in self.tree.get_children(""):
+            vals = self.tree.item(item, "values")
+            if vals and vals[0] == typ and self._strip_emoji(self.tree.item(item, "text")) == name:
+                self.tree.selection_set(item)
+                self.tree.see(item)
+                return
+            for child in self.tree.get_children(item):
+                vals = self.tree.item(child, "values")
+                if vals and vals[0] == typ and self._strip_emoji(self.tree.item(child, "text")) == name:
+                    self.tree.selection_set(child)
+                    self.tree.see(child)
+                    return
+                for grand in self.tree.get_children(child):
+                    vals = self.tree.item(grand, "values")
+                    if vals and vals[0] == typ and self._strip_emoji(self.tree.item(grand, "text")) == name:
+                        self.tree.selection_set(grand)
+                        self.tree.see(grand)
+                        return
+
+    def _clear_search(self, event=None):
+        self.search_var.set("")
+        self._do_filter_tree()
 
     def _on_tree_scroll(self, first, last):
         self.tree_scrollbar.set(first, last)
@@ -569,7 +642,24 @@ class EditorWindow:
         link_base = self._link_tag_counter
         pattern = r'(\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
         link_idx = 0
-        for line in text.split("\n"):
+        lines = text.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                lang = stripped[3:].strip()
+                code_lines = []
+                i += 1
+                while i < len(lines):
+                    if lines[i].strip() == "```":
+                        i += 1
+                        break
+                    code_lines.append(lines[i])
+                    i += 1
+                self._insert_code_block_editor(lang, code_lines)
+                continue
+            # Normal line processing
             bullet = False
             rest = line
             if line.startswith("- ") or line.startswith("* "):
@@ -604,6 +694,88 @@ class EditorWindow:
                     tag = "r_bullet" if bullet else "r_normal"
                     self.knowledge_text.insert(tk.END, part, tag)
             self.knowledge_text.insert(tk.END, "\n")
+            i += 1
+
+    def _insert_code_block_editor(self, lang, lines):
+        code = "\n".join(lines)
+        self._highlight_code_editor(lang, code)
+        self.knowledge_text.insert(tk.END, "\n")
+
+    def _highlight_code_editor(self, lang, code):
+        lang = lang.lower()
+        kw_conf = _LANG_KEYWORDS.get(lang, {})
+        keywords = kw_conf.get("keywords", set())
+        comment_markers = kw_conf.get("comment", [])
+        string_chars = kw_conf.get("string", [])
+
+        self.knowledge_text.tag_config("r_code_block", font=("Consolas", 10), background="#1e1e1e",
+                                        foreground="#d4d4d4", lmargin1=10, lmargin2=10)
+        self.knowledge_text.tag_config("r_cb_keyword", foreground="#569cd6")
+        self.knowledge_text.tag_config("r_cb_string", foreground="#ce9178")
+        self.knowledge_text.tag_config("r_cb_comment", foreground="#6a9955")
+        self.knowledge_text.tag_config("r_cb_number", foreground="#b5cea8")
+
+        i = 0
+        line_start = 0
+        while i < len(code):
+            ch = code[i]
+            comment_hit = False
+            for cm in comment_markers:
+                if code[i:].startswith(cm):
+                    rest = code[i:]
+                    self.knowledge_text.insert(tk.END, code[line_start:i], "r_code_block")
+                    self.knowledge_text.insert(tk.END, rest, ("r_code_block", "r_cb_comment"))
+                    line_start = len(code)
+                    i = len(code)
+                    comment_hit = True
+                    break
+            if comment_hit:
+                continue
+            string_hit = False
+            for sc in sorted(string_chars, key=len, reverse=True):
+                if code[i:].startswith(sc):
+                    end = code.find(sc, i + len(sc))
+                    if end == -1:
+                        end = len(code)
+                    else:
+                        end += 1
+                    s = code[i:end]
+                    self.knowledge_text.insert(tk.END, code[line_start:i], "r_code_block")
+                    self.knowledge_text.insert(tk.END, s.replace(" ", "\u00a0"), ("r_code_block", "r_cb_string"))
+                    i = end
+                    line_start = i
+                    string_hit = True
+                    break
+            if string_hit:
+                continue
+            if ch.isdigit() or (ch == '-' and i + 1 < len(code) and code[i + 1].isdigit()):
+                j = i
+                if ch == '-':
+                    j += 1
+                while j < len(code) and (code[j].isdigit() or code[j] == '.'):
+                    j += 1
+                num = code[i:j]
+                self.knowledge_text.insert(tk.END, code[line_start:i], "r_code_block")
+                self.knowledge_text.insert(tk.END, num, ("r_code_block", "r_cb_number"))
+                i = j
+                line_start = i
+                continue
+            if ch.isalpha() or ch == '_':
+                j = i
+                while j < len(code) and (code[j].isalnum() or code[j] == '_'):
+                    j += 1
+                word = code[i:j]
+                if word in keywords or word.upper() in keywords:
+                    self.knowledge_text.insert(tk.END, code[line_start:i], "r_code_block")
+                    self.knowledge_text.insert(tk.END, word, ("r_code_block", "r_cb_keyword"))
+                    i = j
+                    line_start = i
+                    continue
+                i += 1
+                continue
+            i += 1
+        if line_start < len(code):
+            self.knowledge_text.insert(tk.END, code[line_start:], "r_code_block")
 
     def _switch_to_read_mode(self):
         self._read_mode = True
@@ -1004,3 +1176,115 @@ def launch_editor(root=None, on_close=None):
     else:
         app = EditorWindow(root, on_close)
         return app
+
+
+_LANG_KEYWORDS = {
+    "python": {
+        "keywords": {
+            "def", "class", "if", "else", "elif", "for", "while", "import", "from",
+            "return", "try", "except", "finally", "with", "as", "in", "not", "and",
+            "or", "True", "False", "None", "pass", "break", "continue", "lambda",
+            "yield", "raise", "is", "del", "global", "nonlocal", "assert", "async",
+            "await",
+        },
+        "comment": ["#"],
+        "string": ["\"", "'", "\"\"\"", "'''"],
+    },
+    "javascript": {
+        "keywords": {
+            "function", "const", "let", "var", "if", "else", "for", "while", "do",
+            "switch", "case", "break", "continue", "return", "import", "export",
+            "from", "class", "extends", "new", "this", "super", "try", "catch",
+            "finally", "throw", "async", "await", "yield", "typeof", "instanceof",
+            "of", "in", "true", "false", "null", "undefined", "NaN", "delete",
+            "void", "with", "debugger",
+        },
+        "comment": ["//", "/*"],
+        "string": ["\"", "'", "`"],
+    },
+    "typescript": {
+        "keywords": {
+            "function", "const", "let", "var", "if", "else", "for", "while", "do",
+            "switch", "case", "break", "continue", "return", "import", "export",
+            "from", "class", "extends", "implements", "interface", "type", "enum",
+            "new", "this", "super", "try", "catch", "finally", "throw", "async",
+            "await", "yield", "typeof", "instanceof", "of", "in", "true", "false",
+            "null", "undefined", "as", "is", "keyof", "readonly", "public",
+            "private", "protected", "static", "abstract", "declare",
+        },
+        "comment": ["//", "/*"],
+        "string": ["\"", "'", "`"],
+    },
+    "java": {
+        "keywords": {
+            "public", "private", "protected", "static", "class", "interface",
+            "extends", "implements", "abstract", "final", "void", "return",
+            "if", "else", "for", "while", "do", "switch", "case", "break",
+            "continue", "new", "this", "super", "try", "catch", "finally",
+            "throw", "throws", "import", "package", "boolean", "int", "long",
+            "float", "double", "char", "byte", "short", "String", "true",
+            "false", "null", "synchronized", "volatile", "transient",
+            "instanceof", "enum", "var",
+        },
+        "comment": ["//", "/*"],
+        "string": ["\""],
+    },
+    "cpp": {
+        "keywords": {
+            "int", "long", "float", "double", "char", "bool", "void", "auto",
+            "const", "static", "class", "struct", "enum", "union", "typedef",
+            "template", "typename", "namespace", "using", "virtual", "override",
+            "public", "private", "protected", "if", "else", "for", "while", "do",
+            "switch", "case", "break", "continue", "return", "new", "delete",
+            "this", "try", "catch", "throw", "true", "false", "nullptr",
+            "include", "define", "pragma", "sizeof", "typedef", "constexpr",
+            "inline", "extern", "friend", "operator",
+        },
+        "comment": ["//", "/*"],
+        "string": ["\"", "'"],
+    },
+    "c": {
+        "keywords": {
+            "int", "long", "float", "double", "char", "void", "short", "unsigned",
+            "signed", "const", "static", "struct", "union", "enum", "typedef",
+            "if", "else", "for", "while", "do", "switch", "case", "break",
+            "continue", "return", "sizeof", "include", "define", "pragma",
+            "extern", "volatile", "register", "goto",
+        },
+        "comment": ["//", "/*"],
+        "string": ["\"", "'"],
+    },
+    "html": {
+        "keywords": set(),
+        "comment": ["<!--"],
+        "string": ["\"", "'"],
+    },
+    "css": {
+        "keywords": set(),
+        "comment": ["/*"],
+        "string": ["\"", "'"],
+    },
+    "bash": {
+        "keywords": {
+            "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
+            "case", "esac", "function", "return", "exit", "echo", "export",
+            "local", "source", "cd", "ls", "rm", "mv", "cp", "mkdir",
+        },
+        "comment": ["#"],
+        "string": ["\"", "'"],
+    },
+    "sql": {
+        "keywords": {
+            "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE",
+            "SET", "DELETE", "CREATE", "TABLE", "DROP", "ALTER", "INDEX",
+            "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "ON", "AND", "OR",
+            "NOT", "IN", "LIKE", "BETWEEN", "ORDER", "BY", "GROUP", "HAVING",
+            "LIMIT", "OFFSET", "AS", "DISTINCT", "COUNT", "SUM", "AVG", "MIN",
+            "MAX", "NULL", "IS", "TRUE", "FALSE", "PRIMARY", "KEY", "FOREIGN",
+            "REFERENCES", "UNION", "ALL", "CASE", "WHEN", "THEN", "ELSE", "END",
+            "EXISTS", "UNIQUE", "DEFAULT", "CHECK", "VIEW", "INDEX",
+        },
+        "comment": ["--", "/*"],
+        "string": ["\"", "'"],
+    },
+}

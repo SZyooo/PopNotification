@@ -51,6 +51,16 @@ def start_editor(parent):
 
 
 def main():
+    try:
+        import ctypes
+        mutex_name = "PopNotification-Instance"
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW(None, False, mutex_name)
+        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            sys.exit(0)
+    except Exception:
+        pass
+
     root = tk.Tk()
     root.withdraw()
 

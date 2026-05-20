@@ -103,8 +103,14 @@ class PopupWindow:
         )
         self.text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 4))
 
+        self.more_indicator = tk.Label(
+            body_frame, text="…", bg=bg, fg="#999",
+            font=("Microsoft YaHei", 10), anchor=tk.CENTER
+        )
+
         self._populate_text(knowledge, ktype)
-        self._truncate_text()
+        # Schedule indicator check after slide-in animation completes (150ms)
+        self.top.after(200, self._update_more_indicator)
 
         detail_btn = tk.Button(
             btn_frame, text="详细 ▼", font=("Microsoft YaHei", 9),
@@ -161,14 +167,31 @@ class PopupWindow:
         self.text_widget.config(state=tk.DISABLED)
 
     def _insert_markup_text(self, text):
-        pattern = r'(\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
-        for line in text.split("\n"):
+        lines = text.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                lang = stripped[3:].strip()
+                code_lines = []
+                i += 1
+                while i < len(lines):
+                    if lines[i].strip() == "```":
+                        i += 1
+                        break
+                    code_lines.append(lines[i])
+                    i += 1
+                self._insert_code_block(lang, code_lines)
+                continue
+            # Normal line processing
             bullet = False
             rest = line
             if line.startswith("- ") or line.startswith("* "):
                 bullet = True
                 rest = line[2:]
                 self.text_widget.insert(tk.END, "  • ", "bullet")
+            pattern = r'(\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
             parts = re.split(pattern, rest)
             for part in parts:
                 if part.startswith("[[") and part.endswith("]]"):
@@ -204,17 +227,216 @@ class PopupWindow:
                     tag = "bullet" if bullet else "normal"
                     self.text_widget.insert(tk.END, part, tag)
             self.text_widget.insert(tk.END, "\n")
+            i += 1
 
-    def _truncate_text(self):
-        widget = self.text_widget
-        max_chars = int(self.width * 0.38)
-        content = widget.get("1.0", tk.END).strip()
-        if len(content) > max_chars:
-            widget.config(state=tk.NORMAL)
-            widget.delete("1.0", tk.END)
-            truncated = content[:max_chars - 3] + "..."
-            self._insert_plain_text(truncated)
-            widget.config(state=tk.DISABLED)
+    def _insert_code_block(self, lang, lines):
+        code = "\n".join(lines)
+        self._highlight_code(lang, code)
+        self.text_widget.insert(tk.END, "\n")
+
+    def _highlight_code(self, lang, code):
+        lang = lang.lower()
+        kw_conf = self.__class__._LANG_KEYWORDS.get(lang, {})
+        keywords = kw_conf.get("keywords", set())
+        comment_markers = kw_conf.get("comment", [])
+        string_chars = kw_conf.get("string", [])
+
+        self.text_widget.tag_config("code_block", font=("Consolas", 10), background="#1e1e1e",
+                                     foreground="#d4d4d4", lmargin1=10, lmargin2=10)
+        self.text_widget.tag_config("cb_keyword", foreground="#569cd6")
+        self.text_widget.tag_config("cb_string", foreground="#ce9178")
+        self.text_widget.tag_config("cb_comment", foreground="#6a9955")
+        self.text_widget.tag_config("cb_number", foreground="#b5cea8")
+
+        i = 0
+        line_start = 0
+        while i < len(code):
+            ch = code[i]
+            # Check for comment
+            comment_hit = False
+            for cm in comment_markers:
+                if code[i:].startswith(cm):
+                    rest = code[i:]
+                    self.text_widget.insert(tk.END, code[line_start:i], "code_block")
+                    self.text_widget.insert(tk.END, rest, ("code_block", "cb_comment"))
+                    line_start = len(code)
+                    i = len(code)
+                    comment_hit = True
+                    break
+            if comment_hit:
+                continue
+            # Check for string (multi-char markers first)
+            string_hit = False
+            for sc in sorted(string_chars, key=len, reverse=True):
+                if code[i:].startswith(sc):
+                    end = code.find(sc, i + len(sc))
+                    if end == -1:
+                        end = len(code)
+                    else:
+                        end += len(sc)
+                    s = code[i:end]
+                    self.text_widget.insert(tk.END, code[line_start:i], "code_block")
+                    # Escape non-breaking spaces inside strings
+                    self.text_widget.insert(tk.END, s.replace(" ", "\u00a0"), ("code_block", "cb_string"))
+                    i = end
+                    line_start = i
+                    string_hit = True
+                    break
+            if string_hit:
+                continue
+            # Check for number
+            if ch.isdigit() or (ch == '-' and i + 1 < len(code) and code[i + 1].isdigit()):
+                j = i
+                if ch == '-':
+                    j += 1
+                while j < len(code) and (code[j].isdigit() or code[j] == '.'):
+                    j += 1
+                num = code[i:j]
+                self.text_widget.insert(tk.END, code[line_start:i], "code_block")
+                self.text_widget.insert(tk.END, num, ("code_block", "cb_number"))
+                i = j
+                line_start = i
+                continue
+            # Check for keyword (word boundary)
+            if ch.isalpha() or ch == '_':
+                j = i
+                while j < len(code) and (code[j].isalnum() or code[j] == '_'):
+                    j += 1
+                word = code[i:j]
+                if word in keywords or word.upper() in keywords:
+                    self.text_widget.insert(tk.END, code[line_start:i], "code_block")
+                    self.text_widget.insert(tk.END, word, ("code_block", "cb_keyword"))
+                    i = j
+                    line_start = i
+                    continue
+                # If not a keyword, fall through to default
+                i += 1
+                continue
+            i += 1
+        # Flush remaining text
+        if line_start < len(code):
+            self.text_widget.insert(tk.END, code[line_start:], "code_block")
+
+
+    _LANG_KEYWORDS = {
+        "python": {
+            "keywords": {
+                "def", "class", "if", "else", "elif", "for", "while", "import", "from",
+                "return", "try", "except", "finally", "with", "as", "in", "not", "and",
+                "or", "True", "False", "None", "pass", "break", "continue", "lambda",
+                "yield", "raise", "is", "del", "global", "nonlocal", "assert", "async",
+                "await",
+            },
+            "comment": ["#"],
+            "string": ["\"", "'", "\"\"\"", "'''"],
+        },
+        "javascript": {
+            "keywords": {
+                "function", "const", "let", "var", "if", "else", "for", "while", "do",
+                "switch", "case", "break", "continue", "return", "import", "export",
+                "from", "class", "extends", "new", "this", "super", "try", "catch",
+                "finally", "throw", "async", "await", "yield", "typeof", "instanceof",
+                "of", "in", "true", "false", "null", "undefined", "NaN", "delete",
+                "void", "with", "debugger",
+            },
+            "comment": ["//", "/*"],
+            "string": ["\"", "'", "`"],
+        },
+        "typescript": {
+            "keywords": {
+                "function", "const", "let", "var", "if", "else", "for", "while", "do",
+                "switch", "case", "break", "continue", "return", "import", "export",
+                "from", "class", "extends", "implements", "interface", "type", "enum",
+                "new", "this", "super", "try", "catch", "finally", "throw", "async",
+                "await", "yield", "typeof", "instanceof", "of", "in", "true", "false",
+                "null", "undefined", "as", "is", "keyof", "readonly", "public",
+                "private", "protected", "static", "abstract", "declare",
+            },
+            "comment": ["//", "/*"],
+            "string": ["\"", "'", "`"],
+        },
+        "java": {
+            "keywords": {
+                "public", "private", "protected", "static", "class", "interface",
+                "extends", "implements", "abstract", "final", "void", "return",
+                "if", "else", "for", "while", "do", "switch", "case", "break",
+                "continue", "new", "this", "super", "try", "catch", "finally",
+                "throw", "throws", "import", "package", "boolean", "int", "long",
+                "float", "double", "char", "byte", "short", "String", "true",
+                "false", "null", "synchronized", "volatile", "transient",
+                "instanceof", "enum", "var",
+            },
+            "comment": ["//", "/*"],
+            "string": ["\""],
+        },
+        "cpp": {
+            "keywords": {
+                "int", "long", "float", "double", "char", "bool", "void", "auto",
+                "const", "static", "class", "struct", "enum", "union", "typedef",
+                "template", "typename", "namespace", "using", "virtual", "override",
+                "public", "private", "protected", "if", "else", "for", "while", "do",
+                "switch", "case", "break", "continue", "return", "new", "delete",
+                "this", "try", "catch", "throw", "true", "false", "nullptr",
+                "include", "define", "pragma", "sizeof", "typedef", "constexpr",
+                "inline", "extern", "friend", "operator",
+            },
+            "comment": ["//", "/*"],
+            "string": ["\"", "'"],
+        },
+        "c": {
+            "keywords": {
+                "int", "long", "float", "double", "char", "void", "short", "unsigned",
+                "signed", "const", "static", "struct", "union", "enum", "typedef",
+                "if", "else", "for", "while", "do", "switch", "case", "break",
+                "continue", "return", "sizeof", "include", "define", "pragma",
+                "extern", "volatile", "register", "goto",
+            },
+            "comment": ["//", "/*"],
+            "string": ["\"", "'"],
+        },
+        "html": {
+            "keywords": set(),
+            "comment": ["<!--"],
+            "string": ["\"", "'"],
+        },
+        "css": {
+            "keywords": set(),
+            "comment": ["/*"],
+            "string": ["\"", "'"],
+        },
+        "bash": {
+            "keywords": {
+                "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
+                "case", "esac", "function", "return", "exit", "echo", "export",
+                "local", "source", "cd", "ls", "rm", "mv", "cp", "mkdir",
+            },
+            "comment": ["#"],
+            "string": ["\"", "'"],
+        },
+        "sql": {
+            "keywords": {
+                "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE",
+                "SET", "DELETE", "CREATE", "TABLE", "DROP", "ALTER", "INDEX",
+                "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "ON", "AND", "OR",
+                "NOT", "IN", "LIKE", "BETWEEN", "ORDER", "BY", "GROUP", "HAVING",
+                "LIMIT", "OFFSET", "AS", "DISTINCT", "COUNT", "SUM", "AVG", "MIN",
+                "MAX", "NULL", "IS", "TRUE", "FALSE", "PRIMARY", "KEY", "FOREIGN",
+                "REFERENCES", "UNION", "ALL", "CASE", "WHEN", "THEN", "ELSE", "END",
+                "EXISTS", "UNIQUE", "DEFAULT", "CHECK", "VIEW", "INDEX",
+            },
+            "comment": ["--", "/*"],
+            "string": ["\"", "'"],
+        },
+    }
+
+    def _update_more_indicator(self):
+        content = self.text_widget.get("1.0", tk.END).rstrip("\n")
+        total_lines = content.count("\n") + 1
+        more = total_lines > 4
+        if more:
+            self.more_indicator.pack(fill=tk.X, padx=12, pady=(0, 2), side=tk.BOTTOM)
+        else:
+            self.more_indicator.pack_forget()
 
     def _insert_plain_text(self, text):
         self.text_widget.insert(tk.END, text, "normal")
@@ -239,19 +461,15 @@ class PopupWindow:
 
     def toggle_expand(self):
         self.expanded = not self.expanded
+        h = self.expanded_h if self.expanded else self.height
         if self.expanded:
-            h = self.expanded_h
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.delete("1.0", tk.END)
-            self._insert_markup_text(self.knowledge)
-            self.text_widget.config(state=tk.DISABLED)
-        else:
-            h = self.height
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.delete("1.0", tk.END)
-            self._insert_markup_text(self.knowledge)
-            self.text_widget.config(state=tk.DISABLED)
-            self._truncate_text()
+            self.more_indicator.pack_forget()
+        self.text_widget.config(state=tk.NORMAL)
+        self.text_widget.delete("1.0", tk.END)
+        self._insert_markup_text(self.knowledge)
+        self.text_widget.config(state=tk.DISABLED)
+        if not self.expanded:
+            self.top.after(50, self._update_more_indicator)
         self.top.geometry(f"{self.width}x{h}+{(self.top.winfo_screenwidth() - self.width)//2}+40")
 
     def _review(self, action):
