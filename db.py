@@ -128,6 +128,33 @@ class KnowledgeBase:
         if os.path.exists(filepath):
             os.remove(filepath)
 
+    # ---- Subject/Chapter Description ----
+    def get_subject_description(self, subject):
+        path = os.path.join(self.root_path, sanitize_filename(subject), ".description.json")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f).get("description", "")
+        return ""
+
+    def save_subject_description(self, subject, description):
+        path = os.path.join(self.root_path, sanitize_filename(subject), ".description.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"description": description}, f, ensure_ascii=False, indent=2)
+
+    def get_chapter_description(self, subject, chapter):
+        path = os.path.join(self.root_path, sanitize_filename(subject),
+                            sanitize_filename(chapter), ".description.json")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f).get("description", "")
+        return ""
+
+    def save_chapter_description(self, subject, chapter, description):
+        path = os.path.join(self.root_path, sanitize_filename(subject),
+                            sanitize_filename(chapter), ".description.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"description": description}, f, ensure_ascii=False, indent=2)
+
     def update_memory(self, subject, chapter, keyword, new_memory):
         data = self.get_keyword_data(subject, chapter, keyword)
         if data:

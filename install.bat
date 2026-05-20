@@ -1,100 +1,125 @@
 @echo off
-chcp 65001 >nul
-title PopNotification 安装程序
+title PopNotification Setup
 cd /d "%~dp0"
 
+set OFFLINE_DIR=offline_packages
+set HAS_OFFLINE=0
+if exist "%OFFLINE_DIR%\*.whl" set HAS_OFFLINE=1
+
 echo ============================================
-echo   PopNotification - 环境安装脚本
+echo   PopNotification - Environment Setup
 echo ============================================
 echo.
 
-:: --- 检查 Python ---
+if %HAS_OFFLINE% equ 1 echo [MODE] Offline packages detected, will try offline first.
+if %HAS_OFFLINE% equ 0 echo [MODE] Online mode (no offline packages found).
+echo.
+
 where python >nul 2>nul
-if %errorlevel% equ 0 goto :python_found
+if %errorlevel% equ 0 goto python_found
 
-echo [INFO] 未找到系统 Python，尝试下载安装...
-echo.
+echo [INFO] Python not found, attempting install...
 
-:: 检测系统架构
 reg Query "HKLM\Hardware\Description\System\CentralProcessor\0" | find /i "x86" >nul
-if %errorlevel% equ 0 (set ARCH=x86) else (set ARCH=x64)
+if %errorlevel% equ 0 set PYTHON_SUFFIX=
+if %errorlevel% equ 1 set PYTHON_SUFFIX=-amd64
+set PYTHON_LABEL=win32
+if "%PYTHON_SUFFIX%"=="-amd64" set PYTHON_LABEL=amd64
+set PYTHON_VERSION=3.8.10
 
-set PYTHON_VERSION=3.12.9
-set INSTALLER=python-%PYTHON_VERSION%-%ARCH%.exe
-set PYTHON_URL=https://www.python.org/ftp/python/%PYTHON_VERSION%/%INSTALLER%
+if %HAS_OFFLINE% equ 1 (
+    if exist "%OFFLINE_DIR%\python-%PYTHON_VERSION%%PYTHON_SUFFIX%.exe" (
+        echo Installing Python from local file...
+        start /wait "" "%OFFLINE_DIR%\python-%PYTHON_VERSION%%PYTHON_SUFFIX%.exe" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Shortcuts=0
+        if %errorlevel% equ 0 goto refresh_path
+        echo [WARN] Offline Python install failed, trying online...
+    ) else (
+        echo [WARN] Python installer not found in %OFFLINE_DIR%/, trying online...
+    )
+)
+
 set DOWNLOAD_DIR=%TEMP%\pop_install
-set INSTALLER_PATH=%DOWNLOAD_DIR%\%INSTALLER%
-
+set INSTALLER_PATH=%DOWNLOAD_DIR%\python-%PYTHON_VERSION%%PYTHON_SUFFIX%.exe
 if not exist "%DOWNLOAD_DIR%" mkdir "%DOWNLOAD_DIR%"
-
-echo 正在下载 Python %PYTHON_VERSION% (%ARCH%)...
-echo 下载地址: %PYTHON_URL%
-echo 保存到: %INSTALLER_PATH%
-echo.
-
-:: 用 PowerShell 下载
-powershell -Command "try { $wc = New-Object System.Net.WebClient; Write-Host '开始下载...'; $wc.DownloadFile('%PYTHON_URL%', '%INSTALLER_PATH%'); Write-Host '下载完成' } catch { Write-Host '下载失败: ' + $_.Exception.Message; exit 1 }"
+set PYTHON_URL=https://www.python.org/ftp/python/%PYTHON_VERSION%/python-%PYTHON_VERSION%%PYTHON_SUFFIX%.exe
+echo Downloading Python %PYTHON_VERSION% (%PYTHON_LABEL%)...
+powershell -NoProfile -Command "try { $wc=New-Object System.Net.WebClient; Write-Host 'Downloading...'; $wc.DownloadFile('%PYTHON_URL%', '%INSTALLER_PATH%'); Write-Host 'OK' } catch { Write-Host 'FAILED: ' + $_.Exception.Message; exit 1 }"
 if %errorlevel% neq 0 (
-    echo.
-    echo [错误] Python 下载失败！
-    echo 请手动访问 https://www.python.org/downloads/ 安装 Python 后重试。
-    echo.
+    echo [ERROR] Download failed.
+    echo Please manually install Python from https://www.python.org/downloads/
     pause
     exit /b 1
 )
-
-echo.
-echo 正在安装 Python (请勿关闭窗口)...
+echo Installing Python (please wait)...
 start /wait "" "%INSTALLER_PATH%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Shortcuts=0
 if %errorlevel% neq 0 (
-    echo [错误] Python 安装失败 (错误码: %errorlevel%)
-    echo 可以尝试右键以管理员身份运行本脚本。
+    echo [ERROR] Python installer failed (code: %errorlevel%)
     pause
     exit /b 1
 )
-echo Python 安装成功！
-echo.
-echo 正在更新环境变量...
-for /f "tokens=3*" %%i in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "USER_PATH=%%i"
-if defined USER_PATH set "PATH=%USER_PATH%;%PATH%"
+echo Python installed successfully.
+
+:refresh_path
+set PATH=%LOCALAPPDATA%\Programs\Python\Python38\;%PATH%
+set PATH=%LOCALAPPDATA%\Programs\Python\Python38\Scripts\;%PATH%
+
+where python >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [WARN] Python not found in PATH. Trying common locations...
+    if exist "%LOCALAPPDATA%\Programs\Python\Python38\python.exe" set PATH=%LOCALAPPDATA%\Programs\Python\Python38\;%PATH%
+    if exist "%LOCALAPPDATA%\Programs\Python\Python38-32\python.exe" set PATH=%LOCALAPPDATA%\Programs\Python\Python38-32\;%PATH%
+    where python >nul 2>nul
+    if %errorlevel% neq 0 (
+        echo [ERROR] Python installed but not found. Try rebooting.
+        pause
+        exit /b 1
+    )
+)
 
 :python_found
-echo [OK] Python 已就绪
+echo [OK] Python ready
 python --version
-
-:: --- 检查/升级 pip ---
 echo.
-echo 正在检查 pip...
+
 python -m pip --version >nul 2>nul
 if %errorlevel% neq 0 (
-    echo pip 未安装，正在安装...
-    python -m ensurepip --upgrade
+    echo pip not found, installing...
+    if exist "%OFFLINE_DIR%\get-pip.py" (
+        python "%OFFLINE_DIR%\get-pip.py" --no-index --find-links="%OFFLINE_DIR%"
+    ) else (
+        python -m ensurepip --upgrade
+    )
 )
-echo [OK] pip 已就绪
+echo [OK] pip ready
+echo.
 
-:: --- 安装依赖 ---
-echo.
-echo 正在安装项目依赖 (pystray, Pillow)...
-echo.
-python -m pip install --upgrade pip -q
-python -m pip install -r requirements.txt
+echo Installing dependencies...
+if %HAS_OFFLINE% equ 1 (
+    python -m pip install --no-index --find-links="%OFFLINE_DIR%" -r requirements.txt
+    if %errorlevel% neq 0 (
+        echo [WARN] Offline dependency install failed, trying online...
+        python -m pip install --upgrade pip -q
+        python -m pip install -r requirements.txt
+    )
+)
+if %HAS_OFFLINE% equ 0 (
+    python -m pip install --upgrade pip -q
+    python -m pip install -r requirements.txt
+)
 if %errorlevel% neq 0 (
-    echo.
-    echo [错误] 依赖安装失败！
+    echo [ERROR] Dependency installation failed.
     pause
     exit /b 1
 )
 
 echo.
 echo ============================================
-echo   ✓ 安装完成！
+echo   Setup Complete!
 echo.
-echo   运行方式:
-echo     启动.bat    — 后台运行（有控制台窗口）
-echo     启动.vbs    — 静默后台运行（无窗口）
+echo   Run: launch.bat  (with console window)
+echo   Or:  launch.vbs  (silent, no window)
 echo.
-echo   如需添加开机自启，请运行:
-echo     add_to_startup.bat
+echo   For auto-start: run add_to_startup.bat
 echo ============================================
 echo.
 pause

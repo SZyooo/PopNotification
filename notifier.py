@@ -32,12 +32,12 @@ class Notifier:
         self._tray_icon = None
         self._cmd_queue = queue.Queue()
         self._next_check_at = time.time() + self.check_interval_ms / 1000
+        self._tray_status = ""
 
         self._setup_tray()
         self._schedule_check()
         self._poll_queue()
         self._update_tray_tooltip()
-        self.root.after(100, lambda: self._check_now(silent=False))
 
     def _setup_tray(self):
         try:
@@ -121,7 +121,7 @@ class Notifier:
 
     def _schedule_check(self):
         if self.running:
-            self._check_now(silent=True)
+            self._check_now(silent=False)
             self._next_check_at = time.time() + self.check_interval_ms / 1000
             self.root.after(self.check_interval_ms, self._schedule_check)
 
@@ -140,13 +140,16 @@ class Notifier:
         if not self.running:
             return
         if self._tray_icon:
-            remaining = self._next_check_at - time.time()
-            if remaining > 0:
-                mins = int(remaining // 60)
-                secs = int(remaining % 60)
-                text = f"下次弹出: {mins}分{secs}秒"
+            if self._tray_status:
+                text = self._tray_status
             else:
-                text = "正在检查..."
+                remaining = self._next_check_at - time.time()
+                if remaining > 0:
+                    mins = int(remaining // 60)
+                    secs = int(remaining % 60)
+                    text = f"下次弹出: {mins}分{secs}秒"
+                else:
+                    text = "正在检查..."
             try:
                 self._tray_icon.title = text
             except Exception:
@@ -168,28 +171,32 @@ class Notifier:
                 items = [it for it in items if it["subject"] == self._primary_subject]
             candidates = [
                 it for it in items
-                if it["keyword"] not in self.suppressed_items
+                if (it["subject"], it["chapter"], it["keyword"]) not in self.suppressed_items
                 and (it["subject"], it["chapter"], it["keyword"]) not in self._active_item_keys
             ]
             best = self._pick_best(candidates)
             if best:
+                if self.active_popups:
+                    self._tray_status = f"队列待复习: {len(candidates)} 张卡片"
+                    self.root.after(10000, self._clear_tray_status)
+                    return
                 key = (best["subject"], best["chapter"], best["keyword"])
                 self._today_popup_counts[key] = self._today_popup_counts.get(key, 0) + 1
                 self.root.after(0, lambda it=best: self._create_popup(it))
+                cnt = self._today_popup_counts[key]
+                self._tray_status = f"正在弹出: {best['keyword']}" + (f" (今日第{cnt}次)" if cnt > 1 else "")
+                self.root.after(8000, self._clear_tray_status)
                 if not silent:
-                    msg = f"弹出知识卡片: {best['keyword']}"
-                    cnt = self._today_popup_counts[key]
-                    if cnt > 1:
-                        msg += f" (今日第{cnt}次)"
-                    self._show_balloon(msg)
-            elif not silent:
-                if not items:
-                    self._show_balloon("当前没有到期的知识卡片")
-                else:
-                    self._show_balloon(f"找到 {len(items)} 条，但已被临时忽略")
+                    self._show_balloon(self._tray_status)
+            else:
+                self._tray_status = "暂无到期卡片" if not items else f"找到 {len(items)} 条待复习"
+                self.root.after(10000, self._clear_tray_status)
         except Exception:
             import traceback
             traceback.print_exc()
+
+    def _clear_tray_status(self):
+        self._tray_status = ""
 
     def _ensure_date_reset(self):
         today = datetime.now().date()
@@ -235,9 +242,12 @@ class Notifier:
     def _create_popup(self, item):
         item_key = (item["subject"], item["chapter"], item["keyword"])
         self._active_item_keys.add(item_key)
-        popup = show_popup(self.root, item, self._on_review,
-                           lambda: self._on_popup_close(item_key),
-                           on_link=self._open_link)
+        def on_close(skip_next=False, suppress=False):
+            self._on_popup_close(item_key, popup, skip_next, suppress)
+        def on_edit(item_data):
+            self._open_link(item_data["keyword"])
+        popup = show_popup(self.root, item, self._on_review, on_close,
+                           on_link=self._open_link, on_edit=on_edit)
         self.active_popups.append(popup)
 
     def _on_review(self, item_data, new_mem, action):
@@ -247,10 +257,14 @@ class Notifier:
         except Exception:
             pass
 
-    def _on_popup_close(self, item_key):
+    def _on_popup_close(self, item_key, popup, skip_next=False, suppress=False):
         self._active_item_keys.discard(item_key)
-        self.active_popups = [p for p in self.active_popups if p is not None]
-        self.root.after(100, self._check_now)
+        if popup in self.active_popups:
+            self.active_popups.remove(popup)
+        if suppress:
+            self.suppressed_items.add(item_key)
+        if not skip_next:
+            self.root.after(100, self._check_now)
 
     def _open_editor(self):
         if self._editor_window is not None:

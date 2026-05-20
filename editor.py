@@ -6,6 +6,7 @@ import subprocess
 
 from db import KnowledgeBase
 from config import load_config, save_config
+from popup_window import PopupWindow
 
 
 TYPE_OPTIONS = [
@@ -30,7 +31,9 @@ class EditorWindow:
         self.current_chapter = None
         self.current_keyword = None
         self._dirty = False
-
+        self._editing_type = None
+        self._read_mode = False
+        self._suppress_tree_select = False
         self._build_ui()
         self._refresh_tree()
         self._refresh_primary_subjects()
@@ -47,8 +50,22 @@ class EditorWindow:
         left_frame = tk.Frame(self.pw, width=280)
         self.pw.add(left_frame, width=280, minsize=160)
 
+        tk.Label(left_frame, text="主要复习科目", font=("Microsoft YaHei", 9, "bold"),
+                 anchor=tk.W).pack(fill=tk.X, pady=(6, 0), padx=2)
+        subject_frame = tk.Frame(left_frame)
+        subject_frame.pack(fill=tk.X, pady=(2, 4))
+        self.primary_subject_var = tk.StringVar(value="")
+        self.primary_subject_combo = ttk.Combobox(
+            subject_frame, textvariable=self.primary_subject_var,
+            font=("Microsoft YaHei", 10), state="readonly", width=24
+        )
+        self.primary_subject_combo.pack(side=tk.LEFT, padx=(2, 0))
+        self.primary_subject_combo.bind("<<ComboboxSelected>>", self._on_primary_subject_changed)
+        tk.Button(subject_frame, text="刷新", font=("Microsoft YaHei", 8),
+                  command=self._refresh_primary_subjects).pack(side=tk.LEFT, padx=(4, 0))
+
         tk.Label(left_frame, text="知识结构", font=("Microsoft YaHei", 11, "bold"),
-                 anchor=tk.W).pack(fill=tk.X, pady=(0, 4))
+                 anchor=tk.W).pack(fill=tk.X, pady=(4, 2))
 
         tree_frame = tk.Frame(left_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -85,7 +102,7 @@ class EditorWindow:
         bottom_frame = tk.Frame(self.root)
         bottom_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
         self._bottom_frame = bottom_frame
-        tk.Button(bottom_frame, text="更改保存根路径...", font=("Microsoft YaHei", 9),
+        tk.Button(bottom_frame, text="知识库路径...", font=("Microsoft YaHei", 9),
                   command=self._change_root_path).pack(side=tk.LEFT)
         self.path_label = tk.Label(bottom_frame, text="", font=("Microsoft YaHei", 8),
                                    fg="gray", anchor=tk.W)
@@ -132,21 +149,8 @@ class EditorWindow:
         )
         self.empty_label.pack(expand=True)
 
+        # Keyword editing form
         self.form_frame = tk.Frame(self.form_container, bg="#fafafa")
-
-        tk.Label(self.form_frame, text="主要复习科目", font=("Microsoft YaHei", 10, "bold"),
-                 bg="#fafafa").pack(anchor=tk.W, pady=(4, 0))
-        subject_frame = tk.Frame(self.form_frame, bg="#fafafa")
-        subject_frame.pack(fill=tk.X, pady=(2, 6))
-        self.primary_subject_var = tk.StringVar(value="")
-        self.primary_subject_combo = ttk.Combobox(
-            subject_frame, textvariable=self.primary_subject_var,
-            font=("Microsoft YaHei", 10), state="readonly", width=30
-        )
-        self.primary_subject_combo.pack(side=tk.LEFT)
-        self.primary_subject_combo.bind("<<ComboboxSelected>>", self._on_primary_subject_changed)
-        tk.Button(subject_frame, text="刷新列表", font=("Microsoft YaHei", 8),
-                  command=self._refresh_primary_subjects).pack(side=tk.LEFT, padx=(6, 0))
 
         tk.Label(self.form_frame, text="关键词", font=("Microsoft YaHei", 10, "bold"),
                  bg="#fafafa").pack(anchor=tk.W, pady=(4, 0))
@@ -169,33 +173,47 @@ class EditorWindow:
                                              command=self.knowledge_text.yview)
         self.knowledge_text.configure(yscrollcommand=self._on_text_scroll)
 
+        # Subject/Chapter description form
+        self.desc_frame = tk.Frame(self.form_container, bg="#fafafa")
+        self.desc_title = tk.Label(self.desc_frame, font=("Microsoft YaHei", 10, "bold"),
+                                   bg="#fafafa", anchor=tk.W)
+        self.desc_title.pack(fill=tk.X, pady=(8, 4))
+        self.desc_text = tk.Text(self.desc_frame, font=("Microsoft YaHei", 10),
+                                 wrap=tk.WORD, relief=tk.SUNKEN, borderwidth=1,
+                                 height=10, undo=True)
+        self.desc_text.pack(fill=tk.BOTH, expand=True, pady=(2, 4))
+        self.desc_text.bind("<KeyRelease>", lambda e: setattr(self, '_dirty', True))
+
+        # Bottom bar (always visible)
         bottom_bar = tk.Frame(parent, bg="#fafafa")
         bottom_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
-        legend_frame = tk.Frame(bottom_bar, bg="#fafafa")
-        legend_frame.pack(fill=tk.X, pady=(4, 2))
-        tk.Label(legend_frame, text="行内标记语法:", font=("Microsoft YaHei", 8, "bold"),
+        # Keyword-only UI elements
+        self.kw_legend_frame = tk.Frame(bottom_bar, bg="#fafafa")
+        self.kw_legend_frame.pack(fill=tk.X, pady=(4, 2))
+        tk.Label(self.kw_legend_frame, text="行内标记语法:", font=("Microsoft YaHei", 8, "bold"),
                  fg="#888", bg="#fafafa").pack(side=tk.LEFT)
         for tag, desc, fg in [
             ("**加粗**", "强调", "#3498db"),
             ("!!警告!!", "重要", "#e74c3c"),
             ("??提示??", "提示", "#27ae60"),
             ("[[链接]]", "跳转", "#2980b9"),
+            ("`代码`", "等宽", "#e67e22"),
         ]:
-            lbl = tk.Label(legend_frame, text=f"  {tag}={desc}",
+            lbl = tk.Label(self.kw_legend_frame, text=f"  {tag}={desc}",
                            font=("Microsoft YaHei", 8), fg=fg, bg="#fafafa")
             lbl.pack(side=tk.LEFT, padx=(0, 6))
-        lbl2 = tk.Label(legend_frame, text="  -列表=列表",
+        lbl2 = tk.Label(self.kw_legend_frame, text="  -列表=列表",
                         font=("Microsoft YaHei", 8), fg="#8e44ad", bg="#fafafa")
         lbl2.pack(side=tk.LEFT, padx=(0, 6))
 
-        type_line = tk.Frame(bottom_bar, bg="#fafafa")
-        type_line.pack(fill=tk.X, pady=(2, 2))
+        self.kw_type_line = tk.Frame(bottom_bar, bg="#fafafa")
+        self.kw_type_line.pack(fill=tk.X, pady=(2, 2))
 
-        tk.Label(type_line, text="整卡格式:", font=("Microsoft YaHei", 10, "bold"),
+        tk.Label(self.kw_type_line, text="整卡格式:", font=("Microsoft YaHei", 10, "bold"),
                  bg="#fafafa", anchor=tk.W).pack(fill=tk.X, pady=(0, 4))
         self.type_var = tk.StringVar(value="normal")
-        selector = self._build_type_selector(type_line, self.type_var)
+        selector = self._build_type_selector(self.kw_type_line, self.type_var)
         selector.pack(fill=tk.X)
 
         btn_frame = tk.Frame(bottom_bar, bg="#fafafa")
@@ -206,10 +224,19 @@ class EditorWindow:
                                   padx=30, pady=5, cursor="hand2",
                                   command=self._save_keyword)
         self.btn_save.pack(side=tk.RIGHT, padx=(0, 4))
+        self.btn_preview = tk.Button(btn_frame, text="预览", font=("Microsoft YaHei", 10),
+                                     bg="#95a5a6", fg="white", relief=tk.FLAT,
+                                     padx=14, pady=5, cursor="hand2",
+                                     command=self._preview_card)
+
+        # Initially hide keyword-only UI (shown when keyword is selected)
+        self.kw_legend_frame.pack_forget()
+        self.kw_type_line.pack_forget()
+        self.btn_preview.pack_forget()
 
     def _update_path_label(self):
         cfg = load_config()
-        self.path_label.config(text=f"根路径: {cfg.get('root_path', '未设置')}")
+        self.path_label.config(text=f"知识库: {cfg.get('root_path', '未设置')}")
         self._update_git_button()
 
     def _update_git_button(self):
@@ -415,6 +442,9 @@ class EditorWindow:
             pass
 
     def _on_tree_select(self, event):
+        if self._suppress_tree_select:
+            self._suppress_tree_select = False
+            return
         sel = self.tree.selection()
         if not sel:
             return
@@ -427,11 +457,15 @@ class EditorWindow:
             self.current_subject = text
             self.current_chapter = None
             self.current_keyword = None
-            self._show_empty("请选择一个章节或关键词")
+            self._load_subject_desc(text)
         elif typ == "chapter":
+            parent_id = self.tree.parent(item)
+            if parent_id:
+                self.current_subject = self._strip_emoji(
+                    self.tree.item(parent_id, "text"))
             self.current_chapter = text
             self.current_keyword = None
-            self._show_empty("请选择一个关键词进行编辑")
+            self._load_chapter_desc(text)
         elif typ == "keyword":
             parent_id = self.tree.parent(item)
             grandparent_id = self.tree.parent(parent_id)
@@ -451,11 +485,32 @@ class EditorWindow:
     def _show_empty(self, msg=""):
         self.empty_label.pack(expand=True)
         self.form_frame.pack_forget()
+        self.desc_frame.pack_forget()
+        self.kw_legend_frame.pack_forget()
+        self.kw_type_line.pack_forget()
+        self.btn_preview.pack_forget()
         self.empty_label.config(text=msg if msg else "请选择一个关键词进行编辑")
+        self._editing_type = None
 
     def _show_form(self):
         self.empty_label.pack_forget()
+        self.desc_frame.pack_forget()
         self.form_frame.pack(fill=tk.BOTH, expand=True)
+        self.kw_legend_frame.pack(fill=tk.X, pady=(4, 2))
+        self.kw_type_line.pack(fill=tk.X, pady=(2, 2))
+        self.btn_preview.pack(side=tk.RIGHT, padx=(0, 6))
+        self._editing_type = "keyword"
+        self._read_mode = False
+        self.btn_save.config(text="保存", bg="#3498db", command=self._save_keyword)
+        self.knowledge_text.config(state=tk.NORMAL)
+
+    def _show_desc_form(self):
+        self.empty_label.pack_forget()
+        self.form_frame.pack_forget()
+        self.kw_legend_frame.pack_forget()
+        self.kw_type_line.pack_forget()
+        self.btn_preview.pack_forget()
+        self.desc_frame.pack(fill=tk.BOTH, expand=True)
 
     def _load_keyword(self):
         if not self.current_subject or not self.current_chapter or not self.current_keyword:
@@ -471,15 +526,120 @@ class EditorWindow:
         self._show_form()
         self.keyword_entry.delete(0, tk.END)
         self.keyword_entry.insert(0, data.get("keyword", ""))
+        kt = data.get("type", "normal")
+        self.type_var.set(kt)
         self.knowledge_text.config(state=tk.NORMAL)
         self.knowledge_text.delete("1.0", tk.END)
         self.knowledge_text.insert("1.0", data.get("knowledge", ""))
-        kt = data.get("type", "normal")
-        self.type_var.set(kt)
         self._dirty = False
         self.root.after(50, self.knowledge_text.focus_set)
+        self._switch_to_read_mode()
+
+    def _load_subject_desc(self, subject):
+        self._show_desc_form()
+        self.desc_title.config(text=f"📁 学科: {subject}")
+        self.desc_text.config(state=tk.NORMAL)
+        self.desc_text.delete("1.0", tk.END)
+        desc = self.db.get_subject_description(subject)
+        self.desc_text.insert("1.0", desc)
+        self._editing_type = "subject"
+
+    def _load_chapter_desc(self, chapter):
+        self._show_desc_form()
+        self.desc_title.config(text=f"📂 {self.current_subject} → {chapter}")
+        self.desc_text.config(state=tk.NORMAL)
+        self.desc_text.delete("1.0", tk.END)
+        desc = self.db.get_chapter_description(self.current_subject, chapter)
+        self.desc_text.insert("1.0", desc)
+        self._editing_type = "chapter"
+
+    def _render_knowledge(self, text, ktype):
+        import re as _re
+        self.knowledge_text.delete("1.0", tk.END)
+        default_fg = "#2c3e50"
+        accent = "#3498db"
+        self.knowledge_text.tag_config("r_normal", foreground=default_fg)
+        self.knowledge_text.tag_config("r_highlight", foreground=accent, font=("Microsoft YaHei", 10, "bold"))
+        self.knowledge_text.tag_config("r_tip", foreground="#27ae60", font=("Microsoft YaHei", 10))
+        self.knowledge_text.tag_config("r_warning", foreground="#e74c3c", font=("Microsoft YaHei", 10, "bold"))
+        self.knowledge_text.tag_config("r_link", foreground="#2980b9", underline=1, font=("Microsoft YaHei", 10))
+        self.knowledge_text.tag_config("r_bullet", foreground=default_fg, lmargin1=10, lmargin2=24)
+        self.knowledge_text.tag_config("r_code", foreground="#e67e22", font=("Consolas", 10), background="#f4f4f4")
+        self._link_tag_counter = getattr(self, "_link_tag_counter", 0) + 1
+        link_base = self._link_tag_counter
+        pattern = r'(\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
+        link_idx = 0
+        for line in text.split("\n"):
+            bullet = False
+            rest = line
+            if line.startswith("- ") or line.startswith("* "):
+                bullet = True
+                rest = line[2:]
+                self.knowledge_text.insert(tk.END, "  • ", "r_bullet")
+            parts = _re.split(pattern, rest)
+            for part in parts:
+                if part.startswith("[[") and part.endswith("]]"):
+                    kw = part[2:-2]
+                    link_idx += 1
+                    tag = f"_r_link_{link_base}_{link_idx}"
+                    self.knowledge_text.tag_config(tag, foreground="#2980b9", underline=1, font=("Microsoft YaHei", 10))
+                    self.knowledge_text.tag_bind(tag, "<Button-1>", lambda e, k=kw: self.navigate_to_keyword(k))
+                    self.knowledge_text.tag_bind(tag, "<Enter>", lambda e: self.knowledge_text.config(cursor="hand2"))
+                    self.knowledge_text.tag_bind(tag, "<Leave>", lambda e: self.knowledge_text.config(cursor=""))
+                    tags = ("r_bullet", tag) if bullet else (tag,)
+                    self.knowledge_text.insert(tk.END, kw, tags)
+                elif part.startswith("**") and part.endswith("**"):
+                    tags = ("r_bullet", "r_highlight") if bullet else ("r_highlight",)
+                    self.knowledge_text.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("!!") and part.endswith("!!"):
+                    tags = ("r_bullet", "r_warning") if bullet else ("r_warning",)
+                    self.knowledge_text.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("??") and part.endswith("??"):
+                    tags = ("r_bullet", "r_tip") if bullet else ("r_tip",)
+                    self.knowledge_text.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("`") and part.endswith("`"):
+                    tags = ("r_bullet", "r_code") if bullet else ("r_code",)
+                    self.knowledge_text.insert(tk.END, part[1:-1].replace(" ", "\u00a0"), tags)
+                elif part:
+                    tag = "r_bullet" if bullet else "r_normal"
+                    self.knowledge_text.insert(tk.END, part, tag)
+            self.knowledge_text.insert(tk.END, "\n")
+
+    def _switch_to_read_mode(self):
+        self._read_mode = True
+        self._raw_knowledge = self.knowledge_text.get("1.0", tk.END).strip()
+        self._render_knowledge(self._raw_knowledge, self.type_var.get())
+        self.knowledge_text.config(state=tk.DISABLED)
+        self.keyword_entry.config(state="readonly")
+        self.kw_legend_frame.pack_forget()
+        self.kw_type_line.pack_forget()
+        self.btn_save.config(text="编辑", bg="#2ecc71", command=self._switch_to_edit_mode)
+        self.btn_preview.pack_forget()
+
+    def _switch_to_edit_mode(self):
+        self._read_mode = False
+        self.knowledge_text.config(state=tk.NORMAL)
+        self.knowledge_text.delete("1.0", tk.END)
+        self.knowledge_text.insert("1.0", self._raw_knowledge)
+        self.keyword_entry.config(state="normal")
+        self.kw_legend_frame.pack(fill=tk.X, pady=(4, 2))
+        self.kw_type_line.pack(fill=tk.X, pady=(2, 2))
+        self.btn_save.config(text="保存", bg="#3498db", command=self._save_keyword)
+        self.btn_preview.pack(side=tk.RIGHT, padx=(0, 6))
 
     def _save_keyword(self):
+        if self._editing_type == "subject":
+            desc = self.desc_text.get("1.0", tk.END).strip()
+            self.db.save_subject_description(self.current_subject, desc)
+            self._dirty = False
+            messagebox.showinfo("成功", "学科描述已保存")
+            return
+        if self._editing_type == "chapter":
+            desc = self.desc_text.get("1.0", tk.END).strip()
+            self.db.save_chapter_description(self.current_subject, self.current_chapter, desc)
+            self._dirty = False
+            messagebox.showinfo("成功", "章节描述已保存")
+            return
         if not self.current_subject or not self.current_chapter or not self.current_keyword:
             messagebox.showwarning("提示", "请先选择一个关键词")
             return
@@ -491,29 +651,59 @@ class EditorWindow:
             return
 
         renamed = kw != self.current_keyword
-        if renamed:
-            old_kw = self.current_keyword
-
+        old_kw = self.current_keyword if renamed else None
         self.db.save_keyword(self.current_subject, self.current_chapter, kw, knowledge, kt)
-
+        self.current_keyword = kw
         if renamed:
-            old_path = self.db.get_keyword_path(
-                self.current_subject, self.current_chapter, old_kw)
-            if os.path.exists(old_path):
-                os.remove(old_path)
-            self.current_keyword = kw
+            if old_kw:
+                old_path = self.db.get_keyword_path(
+                    self.current_subject, self.current_chapter, old_kw)
+                if os.path.exists(old_path):
+                    os.remove(old_path)
             self._refresh_tree()
+            self._suppress_tree_select = True
             self._select_keyword_in_tree(kw)
-        else:
-            self.current_keyword = kw
-            data = self.db.get_keyword_data(
-                self.current_subject, self.current_chapter, self.current_keyword)
-            if data:
-                self._show_form()
-                self.type_var.set(data.get("type", "normal"))
-
+        data = self.db.get_keyword_data(
+            self.current_subject, self.current_chapter, self.current_keyword)
+        if data:
+            self.type_var.set(data.get("type", "normal"))
         self._dirty = False
-        messagebox.showinfo("成功", "保存成功")
+        if self._editing_type == "keyword":
+            self._switch_to_read_mode()
+
+    def _preview_card(self):
+        if self._editing_type != "keyword":
+            return
+        try:
+            kw = self.keyword_entry.get().strip()
+            knowledge = self.knowledge_text.get("1.0", tk.END).strip()
+            if not kw or not knowledge:
+                messagebox.showwarning("提示", "关键词和内容不能为空")
+                return
+            if self._preview_popup is not None:
+                try:
+                    self._preview_popup.top.destroy()
+                except tk.TclError:
+                    pass
+                self._preview_popup = None
+            item = {
+                "keyword": kw,
+                "knowledge": knowledge,
+                "type": self.type_var.get(),
+                "subject": self.current_subject or "",
+                "chapter": self.current_chapter or "",
+            }
+            self._preview_popup = PopupWindow(
+                self.root, item, on_review=lambda *a: None,
+                on_close=self._clear_preview, on_link=None, preview=True
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("预览失败", str(e))
+
+    def _clear_preview(self):
+        self._preview_popup = None
 
     def _select_keyword_in_tree(self, keyword):
         for item in self.tree.get_children(""):

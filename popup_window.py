@@ -26,13 +26,15 @@ TYPE_TAG = {"normal": "常规", "tip": "提示", "warning": "警告"}
 
 
 class PopupWindow:
-    def __init__(self, parent, item, on_review, on_close, on_link=None):
+    def __init__(self, parent, item, on_review, on_close, on_link=None, on_edit=None, preview=False):
         self.item = item
         self.on_review = on_review
         self.on_close = on_close
         self.on_link = on_link
+        self.on_edit = on_edit
         self.expanded = False
         self.closing = False
+        self.preview = preview
 
         kw = item.get("keyword", "")
         knowledge = item.get("knowledge", "")
@@ -114,17 +116,26 @@ class PopupWindow:
         close_btn = tk.Button(
             btn_frame, text="×", font=("Arial", 14, "bold"),
             bg="#e74c3c", fg="white", relief=tk.FLAT, padx=6, cursor="hand2",
-            command=self._close
+            command=lambda: self._close(suppress=True)
         )
         close_btn.place(relx=1.0, rely=0.5, anchor=tk.E, x=-8, height=28)
 
-        for i, label in enumerate(("陌生", "熟悉", "熟记")):
-            btn = tk.Button(
-                btn_frame, text=label, font=("Microsoft YaHei", 9),
-                bg=btn_bg, relief=tk.GROOVE, padx=8, cursor="hand2",
-                command=lambda a=label: self._review(a)
-            )
-            btn.place(relx=0.35 + i * 0.12, rely=0.5, anchor=tk.CENTER, width=60, height=28)
+        edit_btn = tk.Button(
+            btn_frame, text="编辑", font=("Microsoft YaHei", 9),
+            bg=btn_bg, relief=tk.GROOVE, padx=8, cursor="hand2",
+            command=self._edit
+        )
+        if not self.preview:
+            edit_btn.place(relx=1.0, rely=0.5, anchor=tk.E, x=-55, height=28)
+
+        if not self.preview:
+            for i, label in enumerate(("陌生", "熟悉", "熟记")):
+                btn = tk.Button(
+                    btn_frame, text=label, font=("Microsoft YaHei", 9),
+                    bg=btn_bg, relief=tk.GROOVE, padx=8, cursor="hand2",
+                    command=lambda a=label: self._review(a)
+                )
+                btn.place(relx=0.35 + i * 0.12, rely=0.5, anchor=tk.CENTER, width=60, height=28)
 
         self._slide_in(self.width, self.height, screen_h)
         self.top.bind("<Escape>", lambda e: self._close())
@@ -141,14 +152,16 @@ class PopupWindow:
         self.text_widget.tag_config("highlight", foreground=accent, font=("Microsoft YaHei", 10, "bold"))
         self.text_widget.tag_config("tip", foreground="#27ae60", font=("Microsoft YaHei", 10))
         self.text_widget.tag_config("warning", foreground="#e74c3c", font=("Microsoft YaHei", 10, "bold"))
-        self.text_widget.tag_config("bullet", foreground=default_fg, lmargin1=20, lmargin2=30)
+        self.text_widget.tag_config("bullet", foreground=default_fg, lmargin1=10, lmargin2=24)
+        self.text_widget.tag_config("code", foreground="#e67e22", font=("Consolas", 10),
+                                     background="#f4f4f4")
 
         self._insert_markup_text(text)
 
         self.text_widget.config(state=tk.DISABLED)
 
     def _insert_markup_text(self, text):
-        pattern = r'(\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?)'
+        pattern = r'(\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
         for line in text.split("\n"):
             bullet = False
             rest = line
@@ -164,7 +177,8 @@ class PopupWindow:
                         tag = f"_link_{id(part)}_{id(line)}"
                         self.text_widget.tag_config(tag, foreground="#2980b9", underline=1,
                                                     font=("Microsoft YaHei", 10))
-                        self.text_widget.insert(tk.END, keyword, tag)
+                        bt = ("bullet", tag) if bullet else (tag,)
+                        self.text_widget.insert(tk.END, keyword, bt)
                         self.text_widget.tag_bind(tag, "<Button-1>",
                             lambda e, kw=keyword: self.on_link(kw))
                         self.text_widget.tag_bind(tag, "<Enter>",
@@ -172,13 +186,20 @@ class PopupWindow:
                         self.text_widget.tag_bind(tag, "<Leave>",
                             lambda e: self.text_widget.config(cursor=""))
                     elif keyword:
-                        self.text_widget.insert(tk.END, keyword, "normal")
+                        tags = ("bullet",) if bullet else ()
+                        self.text_widget.insert(tk.END, keyword, tags + ("normal",))
                 elif part.startswith("**") and part.endswith("**"):
-                    self.text_widget.insert(tk.END, part[2:-2], "highlight")
+                    tags = ("bullet", "highlight") if bullet else ("highlight",)
+                    self.text_widget.insert(tk.END, part[2:-2], tags)
                 elif part.startswith("!!") and part.endswith("!!"):
-                    self.text_widget.insert(tk.END, part[2:-2], "warning")
+                    tags = ("bullet", "warning") if bullet else ("warning",)
+                    self.text_widget.insert(tk.END, part[2:-2], tags)
                 elif part.startswith("??") and part.endswith("??"):
-                    self.text_widget.insert(tk.END, part[2:-2], "tip")
+                    tags = ("bullet", "tip") if bullet else ("tip",)
+                    self.text_widget.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("`") and part.endswith("`"):
+                    tags = ("bullet", "code") if bullet else ("code",)
+                    self.text_widget.insert(tk.END, part[1:-1].replace(" ", "\u00a0"), tags)
                 elif part:
                     tag = "bullet" if bullet else "normal"
                     self.text_widget.insert(tk.END, part, tag)
@@ -241,14 +262,21 @@ class PopupWindow:
         self.on_review(self.item, new_mem, action)
         self._close()
 
-    def _close(self):
+    def _edit(self):
+        if self.closing:
+            return
+        if self.on_edit:
+            self.on_edit(self.item)
+        self._close(skip_next=True)
+
+    def _close(self, skip_next=False, suppress=False):
         self.closing = True
         try:
             self.top.destroy()
         except tk.TclError:
             pass
-        self.on_close()
+        self.on_close(skip_next=skip_next, suppress=suppress)
 
 
-def show_popup(parent, item, on_review, on_close, on_link=None):
-    return PopupWindow(parent, item, on_review, on_close, on_link)
+def show_popup(parent, item, on_review, on_close, on_link=None, on_edit=None):
+    return PopupWindow(parent, item, on_review, on_close, on_link, on_edit)
