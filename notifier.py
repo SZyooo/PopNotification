@@ -37,6 +37,7 @@ class Notifier:
         self._schedule_check()
         self._poll_queue()
         self._update_tray_tooltip()
+        self.root.after(100, lambda: self._check_now(silent=False))
 
     def _setup_tray(self):
         try:
@@ -235,7 +236,8 @@ class Notifier:
         item_key = (item["subject"], item["chapter"], item["keyword"])
         self._active_item_keys.add(item_key)
         popup = show_popup(self.root, item, self._on_review,
-                           lambda: self._on_popup_close(item_key))
+                           lambda: self._on_popup_close(item_key),
+                           on_link=self._open_link)
         self.active_popups.append(popup)
 
     def _on_review(self, item_data, new_mem, action):
@@ -257,12 +259,19 @@ class Notifier:
                 return
             except tk.TclError:
                 self._editor_window = None
+                self._editor_app = None
         import editor
         top = tk.Toplevel(self.root)
         self._editor_window = top
         def on_close():
             self._editor_window = None
-        editor.launch_editor(top, on_close=on_close)
+            self._editor_app = None
+        self._editor_app = editor.launch_editor(top, on_close=on_close)
+
+    def _open_link(self, keyword):
+        self._open_editor()
+        if self._editor_app:
+            self._editor_app.navigate_to_keyword(keyword)
 
     def _show_stats(self):
         try:

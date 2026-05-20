@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import os
+import threading
+import subprocess
 
 from db import KnowledgeBase
 from config import load_config, save_config
@@ -82,11 +84,14 @@ class EditorWindow:
 
         bottom_frame = tk.Frame(self.root)
         bottom_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
+        self._bottom_frame = bottom_frame
         tk.Button(bottom_frame, text="更改保存根路径...", font=("Microsoft YaHei", 9),
                   command=self._change_root_path).pack(side=tk.LEFT)
         self.path_label = tk.Label(bottom_frame, text="", font=("Microsoft YaHei", 8),
                                    fg="gray", anchor=tk.W)
         self.path_label.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+        self._git_btn = None
+        self._git_hint = None
         self._update_path_label()
 
     def _build_form(self, parent):
@@ -174,10 +179,14 @@ class EditorWindow:
             ("**加粗**", "强调", "#3498db"),
             ("!!警告!!", "重要", "#e74c3c"),
             ("??提示??", "提示", "#27ae60"),
+            ("[[链接]]", "跳转", "#2980b9"),
         ]:
             lbl = tk.Label(legend_frame, text=f"  {tag}={desc}",
                            font=("Microsoft YaHei", 8), fg=fg, bg="#fafafa")
             lbl.pack(side=tk.LEFT, padx=(0, 6))
+        lbl2 = tk.Label(legend_frame, text="  -列表=列表",
+                        font=("Microsoft YaHei", 8), fg="#8e44ad", bg="#fafafa")
+        lbl2.pack(side=tk.LEFT, padx=(0, 6))
 
         type_line = tk.Frame(bottom_bar, bg="#fafafa")
         type_line.pack(fill=tk.X, pady=(2, 2))
@@ -200,6 +209,75 @@ class EditorWindow:
     def _update_path_label(self):
         cfg = load_config()
         self.path_label.config(text=f"根路径: {cfg.get('root_path', '未设置')}")
+        self._update_git_button()
+
+    def _update_git_button(self):
+        if self._git_btn is not None:
+            self._git_btn.destroy()
+            self._git_btn = None
+        if self._git_hint is not None:
+            self._git_hint.destroy()
+            self._git_hint = None
+        root_path = load_config().get("root_path", "")
+        if root_path and os.path.isdir(os.path.join(root_path, ".git")):
+            self._git_btn = tk.Button(
+                self._bottom_frame, text="上传到 GitHub",
+                font=("Microsoft YaHei", 9), fg="white", bg="#2c3e50",
+                relief=tk.FLAT, padx=10, cursor="hand2",
+                command=self._git_push
+            )
+            self._git_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        elif root_path:
+            bg = self._bottom_frame.cget("bg")
+            self._git_hint = tk.Label(
+                self._bottom_frame,
+                text="未检测到Git仓库，可执行 git init 启用自动上传",
+                font=("Microsoft YaHei", 8), fg="#aaa", bg=bg,
+            )
+            self._git_hint.pack(side=tk.RIGHT, padx=(4, 0))
+
+    def _git_push(self):
+        root_path = load_config().get("root_path", "")
+        if not root_path or not os.path.isdir(os.path.join(root_path, ".git")):
+            return
+        if self._git_btn is None:
+            return
+        self._git_btn.config(text="上传中...", state=tk.DISABLED)
+        def worker():
+            try:
+                subprocess.run(["git", "add", "."], cwd=root_path, check=True,
+                               capture_output=True, text=True)
+                subprocess.run(["git", "commit", "-m", "auto update"], cwd=root_path,
+                               capture_output=True, text=True)
+                subprocess.run(["git", "push"], cwd=root_path, check=True,
+                               capture_output=True, text=True)
+                self.root.after(0, self._git_success)
+            except subprocess.CalledProcessError as e:
+                self.root.after(0, lambda err=e: self._git_fail(err))
+            except Exception as e:
+                self.root.after(0, lambda err=e: self._git_error(str(err)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _git_success(self):
+        if self._git_btn is not None:
+            self._git_btn.config(text="上传到 GitHub", state=tk.NORMAL)
+        messagebox.showinfo("GitHub 上传", "上传成功")
+
+    def _git_fail(self, err):
+        if self._git_btn is not None:
+            self._git_btn.config(text="上传到 GitHub", state=tk.NORMAL)
+        msg = err.stderr.strip() or err.stdout.strip() or str(err)
+        if "nothing to commit" in msg:
+            messagebox.showinfo("GitHub 上传", "没有需要上传的改动")
+        elif "could not read" in msg.lower() or "failed to push" in msg.lower():
+            messagebox.showerror("GitHub 上传失败", f"推送失败，请检查远程仓库配置:\n{msg}")
+        else:
+            messagebox.showerror("GitHub 上传失败", msg)
+
+    def _git_error(self, msg):
+        if self._git_btn is not None:
+            self._git_btn.config(text="上传到 GitHub", state=tk.NORMAL)
+        messagebox.showerror("GitHub 上传失败", msg)
 
     def _update_type_color(self):
         pass
@@ -416,9 +494,14 @@ class EditorWindow:
             for child in self.tree.get_children(item):
                 for grand in self.tree.get_children(child):
                     if self._strip_emoji(self.tree.item(grand, "text")) == keyword:
+                        self.tree.see(item)
+                        self.tree.see(child)
                         self.tree.selection_set(grand)
                         self.tree.see(grand)
                         return
+
+    def navigate_to_keyword(self, keyword):
+        self._select_keyword_in_tree(keyword)
 
     def _refresh_primary_subjects(self):
         from config import load_config

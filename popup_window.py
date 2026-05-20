@@ -26,10 +26,11 @@ TYPE_TAG = {"normal": "常规", "tip": "提示", "warning": "警告"}
 
 
 class PopupWindow:
-    def __init__(self, parent, item, on_review, on_close):
+    def __init__(self, parent, item, on_review, on_close, on_link=None):
         self.item = item
         self.on_review = on_review
         self.on_close = on_close
+        self.on_link = on_link
         self.expanded = False
         self.closing = False
 
@@ -140,23 +141,48 @@ class PopupWindow:
         self.text_widget.tag_config("highlight", foreground=accent, font=("Microsoft YaHei", 10, "bold"))
         self.text_widget.tag_config("tip", foreground="#27ae60", font=("Microsoft YaHei", 10))
         self.text_widget.tag_config("warning", foreground="#e74c3c", font=("Microsoft YaHei", 10, "bold"))
+        self.text_widget.tag_config("bullet", foreground=default_fg, lmargin1=20, lmargin2=30)
 
         self._insert_markup_text(text)
 
         self.text_widget.config(state=tk.DISABLED)
 
     def _insert_markup_text(self, text):
-        pattern = r'(\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?)'
-        parts = re.split(pattern, text)
-        for part in parts:
-            if part.startswith("**") and part.endswith("**"):
-                self.text_widget.insert(tk.END, part[2:-2], "highlight")
-            elif part.startswith("!!") and part.endswith("!!"):
-                self.text_widget.insert(tk.END, part[2:-2], "warning")
-            elif part.startswith("??") and part.endswith("??"):
-                self.text_widget.insert(tk.END, part[2:-2], "tip")
-            elif part:
-                self.text_widget.insert(tk.END, part, "normal")
+        pattern = r'(\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?)'
+        for line in text.split("\n"):
+            bullet = False
+            rest = line
+            if line.startswith("- ") or line.startswith("* "):
+                bullet = True
+                rest = line[2:]
+                self.text_widget.insert(tk.END, "  • ", "bullet")
+            parts = re.split(pattern, rest)
+            for part in parts:
+                if part.startswith("[[") and part.endswith("]]"):
+                    keyword = part[2:-2]
+                    if keyword and self.on_link:
+                        tag = f"_link_{id(part)}_{id(line)}"
+                        self.text_widget.tag_config(tag, foreground="#2980b9", underline=1,
+                                                    font=("Microsoft YaHei", 10))
+                        self.text_widget.insert(tk.END, keyword, tag)
+                        self.text_widget.tag_bind(tag, "<Button-1>",
+                            lambda e, kw=keyword: self.on_link(kw))
+                        self.text_widget.tag_bind(tag, "<Enter>",
+                            lambda e: self.text_widget.config(cursor="hand2"))
+                        self.text_widget.tag_bind(tag, "<Leave>",
+                            lambda e: self.text_widget.config(cursor=""))
+                    elif keyword:
+                        self.text_widget.insert(tk.END, keyword, "normal")
+                elif part.startswith("**") and part.endswith("**"):
+                    self.text_widget.insert(tk.END, part[2:-2], "highlight")
+                elif part.startswith("!!") and part.endswith("!!"):
+                    self.text_widget.insert(tk.END, part[2:-2], "warning")
+                elif part.startswith("??") and part.endswith("??"):
+                    self.text_widget.insert(tk.END, part[2:-2], "tip")
+                elif part:
+                    tag = "bullet" if bullet else "normal"
+                    self.text_widget.insert(tk.END, part, tag)
+            self.text_widget.insert(tk.END, "\n")
 
     def _truncate_text(self):
         widget = self.text_widget
@@ -224,5 +250,5 @@ class PopupWindow:
         self.on_close()
 
 
-def show_popup(parent, item, on_review, on_close):
-    return PopupWindow(parent, item, on_review, on_close)
+def show_popup(parent, item, on_review, on_close, on_link=None):
+    return PopupWindow(parent, item, on_review, on_close, on_link)
