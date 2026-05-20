@@ -250,6 +250,7 @@ class Notifier:
     def _on_popup_close(self, item_key):
         self._active_item_keys.discard(item_key)
         self.active_popups = [p for p in self.active_popups if p is not None]
+        self.root.after(100, self._check_now)
 
     def _open_editor(self):
         if self._editor_window is not None:
