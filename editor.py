@@ -92,6 +92,7 @@ class EditorWindow:
         self.path_label.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         self._git_btn = None
         self._git_hint = None
+        self._git_url_label = None
         self._update_path_label()
 
     def _build_form(self, parent):
@@ -218,8 +219,12 @@ class EditorWindow:
         if self._git_hint is not None:
             self._git_hint.destroy()
             self._git_hint = None
+        if self._git_url_label is not None:
+            self._git_url_label.destroy()
+            self._git_url_label = None
         root_path = load_config().get("root_path", "")
         if root_path and os.path.isdir(os.path.join(root_path, ".git")):
+            bg = self._bottom_frame.cget("bg")
             self._git_btn = tk.Button(
                 self._bottom_frame, text="上传到 GitHub",
                 font=("Microsoft YaHei", 9), fg="white", bg="#2c3e50",
@@ -227,6 +232,17 @@ class EditorWindow:
                 command=self._git_push
             )
             self._git_btn.pack(side=tk.RIGHT, padx=(4, 0))
+            def fetch_url():
+                url = ""
+                try:
+                    r = subprocess.run(["git", "remote", "get-url", "origin"],
+                                       cwd=root_path, capture_output=True, text=True)
+                    if r.returncode == 0:
+                        url = r.stdout.strip()
+                except Exception:
+                    pass
+                self.root.after(0, lambda u=url: self._show_git_url(u))
+            threading.Thread(target=fetch_url, daemon=True).start()
         elif root_path:
             bg = self._bottom_frame.cget("bg")
             self._git_hint = tk.Label(
@@ -235,6 +251,16 @@ class EditorWindow:
                 font=("Microsoft YaHei", 8), fg="#aaa", bg=bg,
             )
             self._git_hint.pack(side=tk.RIGHT, padx=(4, 0))
+
+    def _show_git_url(self, url):
+        if not url or self._git_btn is None:
+            return
+        bg = self._bottom_frame.cget("bg")
+        self._git_url_label = tk.Label(
+            self._bottom_frame, text=f"远程仓库: {url}",
+            font=("Microsoft YaHei", 8), fg="#555", bg=bg,
+        )
+        self._git_url_label.pack(side=tk.RIGHT, padx=(4, 0))
 
     def _git_push(self):
         root_path = load_config().get("root_path", "")

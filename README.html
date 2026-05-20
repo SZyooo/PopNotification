@@ -52,12 +52,22 @@ rem 3. 启动程序
 
 <h2>主要功能</h2>
 
+<h3>三层组织结构</h3>
+<p>知识卡片按 <strong>学科 → 章节 → 关键词</strong> 三层组织：</p>
+<table>
+  <tr><th>层级</th><th>例子</th><th>说明</th></tr>
+  <tr><td>学科</td><td>英语、数学、计算机</td><td>最高分类，可在托盘中按学科筛选复习</td></tr>
+  <tr><td>章节</td><td>时态、微积分、Python基础</td><td>同一学科下的细分主题</td></tr>
+  <tr><td>关键词</td><td>现在完成时、泰勒公式、列表推导</td><td>最小单位，每条关键词对应一张卡片</td></tr>
+</table>
+<p>在编辑器左侧树形结构中，右键可新建/重命名/删除学科、章节、关键词。</p>
+
 <h3>编辑器</h3>
 <p>右键点击系统托盘图标 → 「打开编辑器」或双击托盘图标。</p>
 <p>左侧树形结构管理学科/章节/关键词，右侧编辑卡片内容：</p>
 <ul>
   <li><strong>关键词</strong> — 卡片标题</li>
-  <li><strong>知识内容</strong> — 支持行内标记语法</li>
+  <li><strong>知识内容</strong> — 支持行内标记语法和列表</li>
   <li><strong>整卡格式</strong> — 普通 / 提示 / 警告</li>
   <li><strong>主要复习科目</strong> — 限定只弹出某一学科的卡片</li>
 </ul>
@@ -69,7 +79,19 @@ rem 3. 启动程序
   <tr><td><code>**加粗**</code></td><td>蓝色强调</td></tr>
   <tr><td><code>!!警告!!</code></td><td>红色重要</td></tr>
   <tr><td><code>??提示??</code></td><td>绿色提示</td></tr>
+  <tr><td><code>[[链接]]</code></td><td>跳转到另一张卡片</td></tr>
+  <tr><td><code>- 列表项</code></td><td>无序列表</td></tr>
 </table>
+
+<h3>启动即弹卡</h3>
+<p>程序启动后自动选择一张到期卡片立即弹出，无需等待定时检查。</p>
+
+<h3>GitHub 自动上传</h3>
+<p>如果知识仓库根目录是 Git 仓库，编辑器底部会自动显示 <strong>「上传到 GitHub」</strong> 按钮及远程仓库地址。点击后依次执行：</p>
+<pre><code>git add .
+git commit -m "auto update"
+git push</code></pre>
+<p>过程在后台线程执行，不卡界面。推送成功/失败均有提示。</p>
 
 <h3>遗忘曲线复习</h3>
 <p>每张卡片有 6 个记忆等级（0~5），每次弹出时：</p>
