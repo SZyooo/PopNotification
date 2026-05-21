@@ -33,7 +33,6 @@ class EditorWindow:
         self._dirty = False
         self._editing_type = None
         self._read_mode = False
-        self._suppress_tree_select = False
         self._preview_popup = None
         self._search_after_id = None
         self.search_var = tk.StringVar(value="")
@@ -427,30 +426,43 @@ class EditorWindow:
         return frame
 
     def _refresh_tree(self):
-        query = self.search_var.get().strip().lower() if hasattr(self, 'search_var') else ""
         self.tree.delete(*self.tree.get_children())
         for subject in self.db.list_subjects():
-            subject_match = not query or query in subject.lower()
-            chapters = self.db.list_chapters(subject)
-            chapter_data = []
-            has_visible = False
-            for chapter in chapters:
-                chapter_match = not query or query in chapter.lower()
-                keywords = self.db.list_keywords(subject, chapter)
-                visible_kws = keywords if (chapter_match or not query) else [kw for kw in keywords if query in kw.lower()]
-                if visible_kws:
-                    has_visible = True
-                    chapter_data.append((chapter, visible_kws))
-            if subject_match or has_visible:
-                sid = self.tree.insert("", tk.END, text=f"📚 {subject}",
-                                        values=("subject",), open=True)
-                for chapter, visible_kws in chapter_data:
-                    cid = self.tree.insert(sid, tk.END, text=f"📖 {chapter}",
-                                           values=("chapter",), open=True)
-                    for kw in visible_kws:
-                        self.tree.insert(cid, tk.END, text=f"💡 {kw}",
-                                         values=("keyword",))
+            sid = self.tree.insert("", tk.END, text=f"📚 {subject}",
+                                    values=("subject",), open=True)
+            for chapter in self.db.list_chapters(subject):
+                cid = self.tree.insert(sid, tk.END, text=f"📖 {chapter}",
+                                       values=("chapter",), open=True)
+                for kw in self.db.list_keywords(subject, chapter):
+                    self.tree.insert(cid, tk.END, text=f"💡 {kw}",
+                                     values=("keyword",))
         self._refresh_primary_subjects()
+        self._apply_tree_filter()
+
+    def _apply_tree_filter(self):
+        query = self.search_var.get().strip().lower() if hasattr(self, 'search_var') else ""
+        if not query:
+            return
+        for subject_item in self.tree.get_children(""):
+            subject_name = self._strip_emoji(self.tree.item(subject_item, "text")).lower()
+            subject_match = query in subject_name
+            any_visible = subject_match
+            for chapter_item in self.tree.get_children(subject_item):
+                chapter_name = self._strip_emoji(self.tree.item(chapter_item, "text")).lower()
+                chapter_match = query in chapter_name
+                kw_visible = chapter_match
+                for kw_item in self.tree.get_children(chapter_item):
+                    kw_name = self._strip_emoji(self.tree.item(kw_item, "text")).lower()
+                    if query in kw_name:
+                        kw_visible = True
+                    else:
+                        self.tree.detach(kw_item)
+                if kw_visible:
+                    any_visible = True
+                else:
+                    self.tree.detach(chapter_item)
+            if not any_visible:
+                self.tree.detach(subject_item)
 
     def _on_search_changed(self, event=None):
         if self._search_after_id is not None:
@@ -515,9 +527,6 @@ class EditorWindow:
             pass
 
     def _on_tree_select(self, event):
-        if self._suppress_tree_select:
-            self._suppress_tree_select = False
-            return
         sel = self.tree.selection()
         if not sel:
             return
@@ -550,6 +559,8 @@ class EditorWindow:
                     self.tree.item(parent_id, "text"))
             self.current_keyword = text
             self._load_keyword()
+            with open("D:\\trace_log.txt", "a", encoding="utf-8") as f:
+                f.write(f"  -> after load: subj={repr(self.current_subject)} ch={repr(self.current_chapter)} kw={repr(self.current_keyword)}\n")
 
     @staticmethod
     def _strip_emoji(text):
@@ -597,8 +608,10 @@ class EditorWindow:
             return
 
         self._show_form()
+        self.keyword_entry.config(state="normal")
+        kw_display = self.current_keyword
         self.keyword_entry.delete(0, tk.END)
-        self.keyword_entry.insert(0, data.get("keyword", ""))
+        self.keyword_entry.insert(0, kw_display)
         kt = data.get("type", "normal")
         self.type_var.set(kt)
         self.knowledge_text.config(state=tk.NORMAL)
@@ -789,6 +802,9 @@ class EditorWindow:
         self.btn_preview.pack_forget()
 
     def _switch_to_edit_mode(self):
+        if self._search_after_id is not None:
+            self.root.after_cancel(self._search_after_id)
+            self._search_after_id = None
         self._read_mode = False
         self.knowledge_text.config(state=tk.NORMAL)
         self.knowledge_text.delete("1.0", tk.END)
@@ -800,6 +816,9 @@ class EditorWindow:
         self.btn_preview.pack(side=tk.RIGHT, padx=(0, 6))
 
     def _save_keyword(self):
+        if self._search_after_id is not None:
+            self.root.after_cancel(self._search_after_id)
+            self._search_after_id = None
         if self._editing_type == "subject":
             desc = self.desc_text.get("1.0", tk.END).strip()
             self.db.save_subject_description(self.current_subject, desc)
@@ -832,8 +851,8 @@ class EditorWindow:
                     self.current_subject, self.current_chapter, old_kw)
                 if os.path.exists(old_path):
                     os.remove(old_path)
+        if renamed:
             self._refresh_tree()
-            self._suppress_tree_select = True
             self._select_keyword_in_tree(kw)
         data = self.db.get_keyword_data(
             self.current_subject, self.current_chapter, self.current_keyword)
@@ -888,6 +907,7 @@ class EditorWindow:
                         self.tree.see(grand)
                         return
 
+
     def navigate_to_keyword(self, keyword):
         self._select_keyword_in_tree(keyword)
 
@@ -926,7 +946,9 @@ class EditorWindow:
             name = entry.get().strip()
             if name:
                 self.db.add_subject(name)
+                self.search_var.set("")
                 self._refresh_tree()
+                self._select_tree_item(("subject", name))
                 dialog.destroy()
             else:
                 messagebox.showwarning("提示", "名称不能为空")
@@ -957,7 +979,9 @@ class EditorWindow:
             name = entry.get().strip()
             if name:
                 self.db.add_chapter(self.current_subject, name)
+                self.search_var.set("")
                 self._refresh_tree()
+                self._select_tree_item(("chapter", name))
                 dialog.destroy()
             else:
                 messagebox.showwarning("提示", "名称不能为空")
@@ -1002,8 +1026,11 @@ class EditorWindow:
                 self.db.save_keyword(
                     self.current_subject, self.current_chapter,
                     kw, knowledge, type_var.get())
+                self.search_var.set("")
                 self._refresh_tree()
+                self.current_keyword = kw
                 self._select_keyword_in_tree(kw)
+                self._load_keyword()
                 dialog.destroy()
             else:
                 messagebox.showwarning("提示", "关键词和内容不能为空")

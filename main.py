@@ -69,6 +69,10 @@ def main():
 
     ensure_root_path(root)
 
+    if "--background" in sys.argv:
+        start_notifier(root)
+        return
+
     answer = messagebox.askyesno(
         "PopNotification",
         "是否启动后台提醒进程？\n\n"
