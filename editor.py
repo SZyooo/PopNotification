@@ -87,7 +87,7 @@ class EditorWindow:
         tree_frame = tk.Frame(left_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.tree = ttk.Treeview(tree_frame, columns=("type",), show="tree")
+        self.tree = ttk.Treeview(tree_frame, show="tree")
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.tree_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -428,14 +428,11 @@ class EditorWindow:
     def _refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
         for subject in self.db.list_subjects():
-            sid = self.tree.insert("", tk.END, text=f"📚 {subject}",
-                                    values=("subject",), open=True)
+            sid = self.tree.insert("", tk.END, text=f"📚 {subject}", open=True)
             for chapter in self.db.list_chapters(subject):
-                cid = self.tree.insert(sid, tk.END, text=f"📖 {chapter}",
-                                       values=("chapter",), open=True)
+                cid = self.tree.insert(sid, tk.END, text=f"📖 {chapter}", open=True)
                 for kw in self.db.list_keywords(subject, chapter):
-                    self.tree.insert(cid, tk.END, text=f"💡 {kw}",
-                                     values=("keyword",))
+                    self.tree.insert(cid, tk.END, text=f"💡 {kw}")
         self._refresh_primary_subjects()
         self._apply_tree_filter()
 
@@ -474,9 +471,16 @@ class EditorWindow:
         sel = self.tree.selection()
         sel_key = None
         if sel:
-            vals = self.tree.item(sel[0], "values")
-            if vals:
-                sel_key = (vals[0], self._strip_emoji(self.tree.item(sel[0], "text")))
+            item = sel[0]
+            parent_id = self.tree.parent(item)
+            grandparent_id = self.tree.parent(parent_id) if parent_id else ""
+            name = self._strip_emoji(self.tree.item(item, "text"))
+            if not parent_id:
+                sel_key = ("subject", name)
+            elif not grandparent_id:
+                sel_key = ("chapter", name)
+            else:
+                sel_key = ("keyword", name)
         self._refresh_tree()
         if sel_key:
             self._select_tree_item(sel_key)
@@ -484,20 +488,17 @@ class EditorWindow:
     def _select_tree_item(self, key):
         typ, name = key
         for item in self.tree.get_children(""):
-            vals = self.tree.item(item, "values")
-            if vals and vals[0] == typ and self._strip_emoji(self.tree.item(item, "text")) == name:
+            if typ == "subject" and self._strip_emoji(self.tree.item(item, "text")) == name:
                 self.tree.selection_set(item)
                 self.tree.see(item)
                 return
             for child in self.tree.get_children(item):
-                vals = self.tree.item(child, "values")
-                if vals and vals[0] == typ and self._strip_emoji(self.tree.item(child, "text")) == name:
+                if typ == "chapter" and self._strip_emoji(self.tree.item(child, "text")) == name:
                     self.tree.selection_set(child)
                     self.tree.see(child)
                     return
                 for grand in self.tree.get_children(child):
-                    vals = self.tree.item(grand, "values")
-                    if vals and vals[0] == typ and self._strip_emoji(self.tree.item(grand, "text")) == name:
+                    if typ == "keyword" and self._strip_emoji(self.tree.item(grand, "text")) == name:
                         self.tree.selection_set(grand)
                         self.tree.see(grand)
                         return
@@ -531,32 +532,26 @@ class EditorWindow:
         if not sel:
             return
         item = sel[0]
-        vals = self.tree.item(item, "values")
-        typ = vals[0] if vals else ""
+        parent_id = self.tree.parent(item)
+        grandparent_id = self.tree.parent(parent_id) if parent_id else ""
         text = self._strip_emoji(self.tree.item(item, "text"))
 
-        if typ == "subject":
+        if not parent_id:
             self.current_subject = text
             self.current_chapter = None
             self.current_keyword = None
             self._load_subject_desc(text)
-        elif typ == "chapter":
-            parent_id = self.tree.parent(item)
-            if parent_id:
-                self.current_subject = self._strip_emoji(
-                    self.tree.item(parent_id, "text"))
+        elif not grandparent_id:
+            self.current_subject = self._strip_emoji(
+                self.tree.item(parent_id, "text"))
             self.current_chapter = text
             self.current_keyword = None
             self._load_chapter_desc(text)
-        elif typ == "keyword":
-            parent_id = self.tree.parent(item)
-            grandparent_id = self.tree.parent(parent_id)
-            if grandparent_id:
-                self.current_subject = self._strip_emoji(
-                    self.tree.item(grandparent_id, "text"))
-            if parent_id:
-                self.current_chapter = self._strip_emoji(
-                    self.tree.item(parent_id, "text"))
+        else:
+            self.current_subject = self._strip_emoji(
+                self.tree.item(grandparent_id, "text"))
+            self.current_chapter = self._strip_emoji(
+                self.tree.item(parent_id, "text"))
             self.current_keyword = text
             self._load_keyword()
 
@@ -1043,22 +1038,23 @@ class EditorWindow:
         if not sel:
             return
         item = sel[0]
-        vals = self.tree.item(item, "values")
-        typ = vals[0] if vals else ""
+        parent_id = self.tree.parent(item)
+        grandparent_id = self.tree.parent(parent_id) if parent_id else ""
         text = self._strip_emoji(self.tree.item(item, "text"))
 
-        if typ == "subject":
+        if not parent_id:
             if messagebox.askyesno("确认", f"确定要删除学科「{text}」及其所有内容？"):
                 self.db.delete_subject(text)
                 self._refresh_tree()
                 self._show_empty()
-        elif typ == "chapter":
-            if self.current_subject and messagebox.askyesno("确认", f"确定要删除章节「{text}」及其所有内容？"):
-                self.db.delete_chapter(self.current_subject, text)
+        elif not grandparent_id:
+            subj = self._strip_emoji(self.tree.item(parent_id, "text"))
+            if messagebox.askyesno("确认", f"确定要删除章节「{text}」及其所有内容？"):
+                self.db.delete_chapter(subj, text)
                 self._refresh_tree()
                 self.current_chapter = None
                 self._show_empty()
-        elif typ == "keyword":
+        else:
             if self.current_subject and self.current_chapter:
                 if messagebox.askyesno("确认", f"确定要删除关键词「{text}」？"):
                     self.db.delete_keyword(self.current_subject, self.current_chapter, text)
@@ -1080,15 +1076,15 @@ class EditorWindow:
         if not sel:
             return
         item = sel[0]
-        vals = self.tree.item(item, "values")
-        typ = vals[0] if vals else ""
+        parent_id = self.tree.parent(item)
+        grandparent_id = self.tree.parent(parent_id) if parent_id else ""
         old_name = self._strip_emoji(self.tree.item(item, "text"))
 
-        if typ == "subject":
+        if not parent_id:
             self._rename_subject(item, old_name)
-        elif typ == "chapter":
+        elif not grandparent_id:
             self._rename_chapter(item, old_name)
-        elif typ == "keyword":
+        else:
             self._rename_keyword(item, old_name)
 
     def _rename_subject(self, item, old_name):
