@@ -559,8 +559,6 @@ class EditorWindow:
                     self.tree.item(parent_id, "text"))
             self.current_keyword = text
             self._load_keyword()
-            with open("D:\\trace_log.txt", "a", encoding="utf-8") as f:
-                f.write(f"  -> after load: subj={repr(self.current_subject)} ch={repr(self.current_chapter)} kw={repr(self.current_keyword)}\n")
 
     @staticmethod
     def _strip_emoji(text):
