@@ -44,19 +44,23 @@ class Notifier:
             from PIL import Image, ImageDraw, ImageFont
             import pystray
 
-            img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(img)
-            draw.ellipse([2, 2, 62, 62], fill="#3498db", outline="#2980b9", width=2)
-            font = None
-            for name in ["segoeui.ttf", "arial.ttf", "msyh.ttc", "C:/Windows/Fonts/msyh.ttc"]:
-                try:
-                    font = ImageFont.truetype(name, 26)
-                    break
-                except Exception:
-                    continue
-            if font is None:
-                font = ImageFont.load_default()
-            draw.text((10, 16), "PN", fill="white", font=font)
+            icon_path = os.path.join(os.path.dirname(__file__), "ICON.png")
+            if os.path.exists(icon_path):
+                img = Image.open(icon_path).resize((64, 64), Image.LANCZOS)
+            else:
+                img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                draw.ellipse([2, 2, 62, 62], fill="#3498db", outline="#2980b9", width=2)
+                font = None
+                for name in ["segoeui.ttf", "arial.ttf", "msyh.ttc", "C:/Windows/Fonts/msyh.ttc"]:
+                    try:
+                        font = ImageFont.truetype(name, 26)
+                        break
+                    except Exception:
+                        continue
+                if font is None:
+                    font = ImageFont.load_default()
+                draw.text((10, 16), "PN", fill="white", font=font)
 
             def on_open(icon, item):
                 self._cmd_queue.put(self._open_editor)
@@ -186,8 +190,7 @@ class Notifier:
                 cnt = self._today_popup_counts[key]
                 self._tray_status = f"正在弹出: {best['keyword']}" + (f" (今日第{cnt}次)" if cnt > 1 else "")
                 self.root.after(8000, self._clear_tray_status)
-                if not silent:
-                    self._show_balloon(self._tray_status)
+                pass  # balloon notification removed
             else:
                 self._tray_status = "暂无到期卡片" if not items else f"找到 {len(items)} 条待复习"
                 self.root.after(10000, self._clear_tray_status)

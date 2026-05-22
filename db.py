@@ -103,7 +103,16 @@ class KnowledgeBase:
                 return json.load(f)
         return None
 
-    def save_keyword(self, subject, chapter, keyword, knowledge, knowledge_type="normal", memory=None):
+    def list_all_keywords(self):
+        """Return all keywords as list of (subject, chapter, keyword) tuples."""
+        result = []
+        for subject in self.list_subjects():
+            for chapter in self.list_chapters(subject):
+                for kw in self.list_keywords(subject, chapter):
+                    result.append((subject, chapter, kw))
+        return result
+
+    def save_keyword(self, subject, chapter, keyword, knowledge, knowledge_type="normal", memory=None, related=None):
         filepath = self.get_keyword_path(subject, chapter, keyword)
         data = {
             "keyword": keyword,
@@ -111,6 +120,8 @@ class KnowledgeBase:
             "type": knowledge_type,
             "updated_at": datetime.now().isoformat(),
         }
+        if related is not None:
+            data["related"] = related
         if memory:
             data["memory"] = memory
         else:
@@ -119,6 +130,8 @@ class KnowledgeBase:
                 data["memory"] = existing["memory"]
             else:
                 data["memory"] = get_initial_memory()
+            if existing and related is None and "related" in existing:
+                data["related"] = existing["related"]
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return data
@@ -181,8 +194,36 @@ class KnowledgeBase:
                             "knowledge": data.get("knowledge", ""),
                             "type": data.get("type", "normal"),
                             "memory": mem,
+                            "related": data.get("related", []),
                         })
         return due
+
+    def cleanup_orphan_images(self, subject, chapter):
+        import re
+        chapter_path = os.path.join(self.root_path, sanitize_filename(subject), sanitize_filename(chapter))
+        images_dir = os.path.join(chapter_path, "_images")
+        if not os.path.isdir(images_dir):
+            return 0
+        referenced = set()
+        for kw in self.list_keywords(subject, chapter):
+            data = self.get_keyword_data(subject, chapter, kw)
+            if data:
+                for m in re.finditer(r'!\[.*?\]\(([^)]+)\)', data.get("knowledge", "")):
+                    referenced.add(m.group(1))
+        count = 0
+        for f in os.listdir(images_dir):
+            filepath = os.path.join(images_dir, f)
+            if os.path.isfile(filepath) and f not in referenced:
+                os.remove(filepath)
+                count += 1
+        return count
+
+    def cleanup_all_orphan_images(self):
+        total = 0
+        for subject in self.list_subjects():
+            for chapter in self.list_chapters(subject):
+                total += self.cleanup_orphan_images(subject, chapter)
+        return total
 
     def get_stats(self):
         total = 0

@@ -1,8 +1,15 @@
 import tkinter as tk
 import re
 import math
+import os
 
 from memory import update_memory
+
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 TYPE_COLORS = {
     "normal": "#2c3e50",
@@ -41,6 +48,9 @@ class PopupWindow:
         ktype = item.get("type", "normal")
         subject = item.get("subject", "")
         chapter = item.get("chapter", "")
+        self._subject = subject
+        self._chapter = chapter
+        related = item.get("related", [])
 
         self.width = 460
         self.height = 200
@@ -82,7 +92,7 @@ class PopupWindow:
         ).pack(side=tk.RIGHT, padx=10)
 
         btn_bg = "#f0f0f0"
-        btn_frame = tk.Frame(self.top, bg=accent, height=46)
+        btn_frame = tk.Frame(self.top, bg=accent, height=50)
         btn_frame.pack(fill=tk.X)
         btn_frame.pack_propagate(False)
 
@@ -95,13 +105,45 @@ class PopupWindow:
         )
         kw_label.pack(fill=tk.X, padx=12, pady=(8, 2))
 
+        self.text_frame = tk.Frame(body_frame, bg=bg)
+        self.text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 4))
+
+        self.text_hscroll = tk.Scrollbar(self.text_frame, orient=tk.HORIZONTAL)
+        self.text_hscroll.pack(side=tk.BOTTOM, fill=tk.X)
+
         self.text_widget = tk.Text(
-            body_frame, font=("Microsoft YaHei", 10),
+            self.text_frame, font=("Microsoft YaHei", 10),
             bg=bg, relief=tk.FLAT, bd=0,
-            wrap=tk.WORD, padx=2, pady=2,
+            wrap=tk.NONE, padx=2, pady=2,
+            xscrollcommand=self.text_hscroll.set,
             state=tk.DISABLED,
         )
-        self.text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 4))
+        self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.text_hscroll.config(command=self.text_widget.xview)
+
+        self.code_frames = []
+
+        # Related topics section
+        self.related_frame = tk.Frame(body_frame, bg=bg)
+        if related:
+            self.related_frame.pack(fill=tk.X, padx=10, pady=(0, 4))
+            tk.Label(self.related_frame, text="相关话题:", font=("Microsoft YaHei", 9, "bold"),
+                     fg=accent, bg=bg).pack(anchor=tk.W, pady=(0, 2))
+            for rel in related:
+                r_kw = rel.get("keyword", "")
+                r_display = rel.get("display", r_kw)
+                if r_kw:
+                    row = tk.Frame(self.related_frame, bg=bg)
+                    row.pack(anchor=tk.W)
+                    link = tk.Label(row, text=f"🔗 {r_display}", font=("Microsoft YaHei", 9),
+                                    fg="#2980b9", bg=bg, cursor="hand2")
+                    link.pack(side=tk.LEFT)
+                    tk.Label(row, text=f"  [{r_kw}]", font=("Microsoft YaHei", 7),
+                             fg="#bbb", bg=bg).pack(side=tk.LEFT)
+                    if self.on_link:
+                        link.bind("<Button-1>", lambda e, k=r_kw: self.on_link(k))
+                    link.bind("<Enter>", lambda e: self.text_widget.config(cursor="hand2"))
+                    link.bind("<Leave>", lambda e: self.text_widget.config(cursor=""))
 
         self.more_indicator = tk.Label(
             body_frame, text="…", bg=bg, fg="#999",
@@ -117,7 +159,7 @@ class PopupWindow:
             bg=btn_bg, relief=tk.GROOVE, padx=10, cursor="hand2",
             command=self.toggle_expand
         )
-        detail_btn.place(x=8, rely=0.5, anchor=tk.W, height=28)
+        detail_btn.place(x=8, rely=0.5, anchor=tk.W, height=32)
 
         close_btn = tk.Button(
             btn_frame, text="×", font=("Arial", 14, "bold"),
@@ -138,10 +180,10 @@ class PopupWindow:
             for i, label in enumerate(("陌生", "熟悉", "熟记")):
                 btn = tk.Button(
                     btn_frame, text=label, font=("Microsoft YaHei", 9),
-                    bg=btn_bg, relief=tk.GROOVE, padx=8, cursor="hand2",
+                    bg=btn_bg, relief=tk.GROOVE, cursor="hand2",
                     command=lambda a=label: self._review(a)
                 )
-                btn.place(relx=0.35 + i * 0.12, rely=0.5, anchor=tk.CENTER, width=60, height=28)
+                btn.place(relx=0.3 + i * 0.15, rely=0.5, anchor=tk.CENTER, width=70, height=32)
 
         self._slide_in(self.width, self.height, screen_h)
         self.top.bind("<Escape>", lambda e: self._close())
@@ -159,8 +201,9 @@ class PopupWindow:
         self.text_widget.tag_config("tip", foreground="#27ae60", font=("Microsoft YaHei", 10))
         self.text_widget.tag_config("warning", foreground="#e74c3c", font=("Microsoft YaHei", 10, "bold"))
         self.text_widget.tag_config("bullet", foreground=default_fg, lmargin1=10, lmargin2=24)
-        self.text_widget.tag_config("code", foreground="#e67e22", font=("Consolas", 10),
-                                     background="#f4f4f4")
+        self.text_widget.tag_config("code", foreground="#e67e22", font=("Consolas", 11, "bold"),
+                                     background="#2d2d2d", relief=tk.GROOVE, borderwidth=1,
+                                     overstrike=False, underline=False, spacing1=2, spacing3=2)
 
         self._insert_markup_text(text)
 
@@ -191,17 +234,28 @@ class PopupWindow:
                 bullet = True
                 rest = line[2:]
                 self.text_widget.insert(tk.END, "  • ", "bullet")
-            pattern = r'(\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
+            pattern = r'(!\[.*?\]\([^)]+\)|\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
             parts = re.split(pattern, rest)
             for part in parts:
-                if part.startswith("[[") and part.endswith("]]"):
-                    keyword = part[2:-2]
+                if part.startswith("![") and part.endswith(")"):
+                    match = re.match(r'!\[(.*?)\]\((.+)\)', part)
+                    if match:
+                        alt_text = match.group(1)
+                        img_path = match.group(2)
+                        self._insert_image(img_path, alt_text)
+                elif part.startswith("[[") and part.endswith("]]"):
+                    inner = part[2:-2]
+                    if "|" in inner:
+                        keyword, display = inner.split("|", 1)
+                    else:
+                        keyword = inner
+                        display = inner
                     if keyword and self.on_link:
                         tag = f"_link_{id(part)}_{id(line)}"
                         self.text_widget.tag_config(tag, foreground="#2980b9", underline=1,
                                                     font=("Microsoft YaHei", 10))
                         bt = ("bullet", tag) if bullet else (tag,)
-                        self.text_widget.insert(tk.END, keyword, bt)
+                        self.text_widget.insert(tk.END, display, bt)
                         self.text_widget.tag_bind(tag, "<Button-1>",
                             lambda e, kw=keyword: self.on_link(kw))
                         self.text_widget.tag_bind(tag, "<Enter>",
@@ -210,7 +264,7 @@ class PopupWindow:
                             lambda e: self.text_widget.config(cursor=""))
                     elif keyword:
                         tags = ("bullet",) if bullet else ()
-                        self.text_widget.insert(tk.END, keyword, tags + ("normal",))
+                        self.text_widget.insert(tk.END, display, tags + ("normal",))
                 elif part.startswith("**") and part.endswith("**"):
                     tags = ("bullet", "highlight") if bullet else ("highlight",)
                     self.text_widget.insert(tk.END, part[2:-2], tags)
@@ -229,93 +283,277 @@ class PopupWindow:
             self.text_widget.insert(tk.END, "\n")
             i += 1
 
+    def _insert_image(self, img_path, alt_text=""):
+        self.text_widget.insert(tk.END, "\n")
+        
+        if not HAS_PIL:
+            self.text_widget.insert(tk.END, f"[图片: {alt_text or img_path}]", "normal")
+            self.text_widget.insert(tk.END, "\n")
+            return
+        
+        try:
+            if not os.path.isabs(img_path):
+                from config import load_config
+                root_path = load_config().get("root_path", "")
+                if root_path:
+                    candidate = os.path.join(root_path, img_path)
+                    if not os.path.exists(candidate) and "/" not in img_path and "\\" not in img_path:
+                        candidate = os.path.join(root_path, getattr(self, '_subject', ''), getattr(self, '_chapter', ''), "_images", img_path)
+                    img_path = candidate
+            
+            if not os.path.exists(img_path):
+                self.text_widget.insert(tk.END, f"[图片不存在: {alt_text or img_path}]", "warning")
+                self.text_widget.insert(tk.END, "\n")
+                return
+            
+            max_width = self.width - 60
+            max_height = 200
+            
+            img = Image.open(img_path)
+            img_width, img_height = img.size
+            
+            if img_width > max_width or img_height > max_height:
+                ratio = min(max_width / img_width, max_height / img_height)
+                new_width = int(img_width * ratio)
+                new_height = int(img_height * ratio)
+                img = img.resize((new_width, new_height), Image.LANCZOS)
+            
+            photo = ImageTk.PhotoImage(img)
+            
+            self.text_widget.image_create(tk.END, image=photo)
+            self.text_widget.insert(tk.END, "\n")
+            
+            if not hasattr(self, '_images'):
+                self._images = []
+            self._images.append(photo)
+            
+        except Exception as e:
+            self.text_widget.insert(tk.END, f"[图片加载失败: {alt_text or img_path}]", "warning")
+            self.text_widget.insert(tk.END, "\n")
+
     def _insert_code_block(self, lang, lines):
-        code = "\n".join(lines)
-        self._highlight_code(lang, code)
+        self.text_widget.insert(tk.END, "\n")
+        
+        block_start = self.text_widget.index(tk.INSERT)
+        
+        self.text_widget.tag_config("cb_header", font=("Microsoft YaHei", 10, "bold"), 
+                                     foreground="#858585")
+        self.text_widget.tag_config("cb_header_lang", font=("Microsoft YaHei", 10, "bold"), 
+                                     foreground="#c678dd")
+        
+        dots = "●●●"
+        self.text_widget.insert(tk.END, dots, "cb_header")
+        self.text_widget.insert(tk.END, " " * 8, "cb_header")
+        self.text_widget.insert(tk.END, lang.upper(), "cb_header_lang")
         self.text_widget.insert(tk.END, "\n")
 
-    def _highlight_code(self, lang, code):
+        self._highlight_code(lang, lines)
+        
+        self.text_widget.tag_config("cb_footer", font=("Microsoft YaHei", 8), 
+                                     foreground="#666")
+        self.text_widget.insert(tk.END, f" {len(lines)} lines", "cb_footer")
+        self.text_widget.insert(tk.END, "\n")
+        
+        block_end = self.text_widget.index(tk.INSERT + " lineend")
+        
+        self.text_widget.tag_config("cb_block_bg", background="#1e1e1e")
+        self.text_widget.tag_add("cb_block_bg", block_start, block_end)
+        self.text_widget.tag_lower("cb_block_bg")
+        
+        self.text_widget.tag_config("cb_header_bg", background="#252526")
+        self.text_widget.tag_add("cb_header_bg", block_start, block_start.split('.')[0] + ".0 lineend")
+        
+        self.text_widget.insert(tk.END, "\n")
+
+    def _highlight_code(self, lang, lines):
         lang = lang.lower()
         kw_conf = self.__class__._LANG_KEYWORDS.get(lang, {})
         keywords = kw_conf.get("keywords", set())
         comment_markers = kw_conf.get("comment", [])
         string_chars = kw_conf.get("string", [])
 
-        self.text_widget.tag_config("code_block", font=("Consolas", 10), background="#1e1e1e",
-                                     foreground="#d4d4d4", lmargin1=10, lmargin2=10)
-        self.text_widget.tag_config("cb_keyword", foreground="#569cd6")
+        self.text_widget.tag_config("code_block", font=("Consolas", 11), background="#1e1e1e",
+                                     foreground="#d4d4d4", lmargin1=50, lmargin2=10, 
+                                     spacing1=2, spacing3=2)
+        self.text_widget.tag_config("cb_line_num", font=("Consolas", 10), foreground="#858585", 
+                                     background="#2d2d2d")
+        self.text_widget.tag_config("cb_keyword", foreground="#569cd6", font=("Consolas", 11, "bold"))
         self.text_widget.tag_config("cb_string", foreground="#ce9178")
-        self.text_widget.tag_config("cb_comment", foreground="#6a9955")
+        self.text_widget.tag_config("cb_comment", foreground="#6a9955", font=("Consolas", 11, "italic"))
         self.text_widget.tag_config("cb_number", foreground="#b5cea8")
+        self.text_widget.tag_config("cb_operator", foreground="#d4d4d4")
+        self.text_widget.tag_config("cb_function", foreground="#dcdcaa")
+        self.text_widget.tag_config("cb_class", foreground="#4ec9b0")
 
+        operators = set("+-*/%=<>!&|^~?:")
+        builtins = {"print", "len", "range", "type", "str", "int", "float", "bool", 
+                    "list", "dict", "set", "tuple", "True", "False", "None",
+                    "console", "log", "document", "window", "parseInt", "parseFloat",
+                    "Math", "Array", "Object", "String", "Number", "Boolean"}
+
+        bg_tag = "cb_bg_line"
+        self.text_widget.tag_config(bg_tag, background="#1e1e1e")
+        
+        code_start = self.text_widget.index(tk.INSERT)
+        
+        for line_num, line in enumerate(lines, 1):
+            self.text_widget.insert(tk.END, f"{line_num:3} ", "cb_line_num")
+            
+            self.text_widget.insert(tk.END, line, "code_block")
+            self.text_widget.insert(tk.END, "\n")
+        
+        code_end = self.text_widget.index(tk.INSERT + " lineend")
+        self.text_widget.tag_add(bg_tag, code_start, code_end)
+        self.text_widget.tag_lower(bg_tag)
+        
+        for line_num, line in enumerate(lines, 1):
+            line_start = f"{int(code_start.split('.')[0]) + line_num - 1}.0"
+            self._highlight_line(line, line_start, keywords, comment_markers, string_chars, operators, builtins)
+
+    def _highlight_line_in_widget(self, widget, line, keywords, comment_markers, string_chars, operators, builtins):
         i = 0
-        line_start = 0
-        while i < len(code):
-            ch = code[i]
-            # Check for comment
+        line_start = widget.index(tk.INSERT)
+        while i < len(line):
+            ch = line[i]
+            
+            if ch.isspace():
+                widget.insert(tk.END, ch)
+                i += 1
+                continue
+            
+            if ch in operators:
+                widget.insert(tk.END, ch, "cb_operator")
+                i += 1
+                continue
+            
             comment_hit = False
             for cm in comment_markers:
-                if code[i:].startswith(cm):
-                    rest = code[i:]
-                    self.text_widget.insert(tk.END, code[line_start:i], "code_block")
-                    self.text_widget.insert(tk.END, rest, ("code_block", "cb_comment"))
-                    line_start = len(code)
-                    i = len(code)
-                    comment_hit = True
-                    break
+                if line[i:].startswith(cm):
+                    widget.insert(tk.END, line[i:], "cb_comment")
+                    return
             if comment_hit:
                 continue
-            # Check for string (multi-char markers first)
+            
             string_hit = False
             for sc in sorted(string_chars, key=len, reverse=True):
-                if code[i:].startswith(sc):
-                    end = code.find(sc, i + len(sc))
+                if line[i:].startswith(sc):
+                    end = line.find(sc, i + len(sc))
                     if end == -1:
-                        end = len(code)
+                        end = len(line)
                     else:
                         end += len(sc)
-                    s = code[i:end]
-                    self.text_widget.insert(tk.END, code[line_start:i], "code_block")
-                    # Escape non-breaking spaces inside strings
-                    self.text_widget.insert(tk.END, s.replace(" ", "\u00a0"), ("code_block", "cb_string"))
+                    widget.insert(tk.END, line[i:end], "cb_string")
                     i = end
-                    line_start = i
                     string_hit = True
                     break
             if string_hit:
                 continue
-            # Check for number
-            if ch.isdigit() or (ch == '-' and i + 1 < len(code) and code[i + 1].isdigit()):
+            
+            if ch.isdigit() or (ch == '-' and i + 1 < len(line) and line[i + 1].isdigit()):
                 j = i
                 if ch == '-':
                     j += 1
-                while j < len(code) and (code[j].isdigit() or code[j] == '.'):
+                while j < len(line) and (line[j].isdigit() or line[j] == '.'):
                     j += 1
-                num = code[i:j]
-                self.text_widget.insert(tk.END, code[line_start:i], "code_block")
-                self.text_widget.insert(tk.END, num, ("code_block", "cb_number"))
+                widget.insert(tk.END, line[i:j], "cb_number")
                 i = j
-                line_start = i
                 continue
-            # Check for keyword (word boundary)
+            
             if ch.isalpha() or ch == '_':
                 j = i
-                while j < len(code) and (code[j].isalnum() or code[j] == '_'):
+                while j < len(line) and (line[j].isalnum() or line[j] == '_'):
                     j += 1
-                word = code[i:j]
-                if word in keywords or word.upper() in keywords:
-                    self.text_widget.insert(tk.END, code[line_start:i], "code_block")
-                    self.text_widget.insert(tk.END, word, ("code_block", "cb_keyword"))
-                    i = j
-                    line_start = i
-                    continue
-                # If not a keyword, fall through to default
+                word = line[i:j]
+                word_upper = word.upper()
+                
+                if word in keywords or word_upper in keywords:
+                    widget.insert(tk.END, word, "cb_keyword")
+                elif word in builtins:
+                    widget.insert(tk.END, word, "cb_function")
+                elif word[0].isupper():
+                    widget.insert(tk.END, word, "cb_class")
+                else:
+                    widget.insert(tk.END, word)
+                i = j
+                continue
+            
+            widget.insert(tk.END, ch)
+            i += 1
+
+    def _highlight_line(self, line, line_start, keywords, comment_markers, string_chars, operators, builtins):
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            
+            if ch.isspace():
                 i += 1
                 continue
+            
+            if ch in operators:
+                pos = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + i}"
+                end_pos = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + i + 1}"
+                self.text_widget.tag_add("cb_operator", pos, end_pos)
+                i += 1
+                continue
+            
+            comment_hit = False
+            for cm in comment_markers:
+                if line[i:].startswith(cm):
+                    pos = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + i}"
+                    line_end = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + len(line)}"
+                    self.text_widget.tag_add("cb_comment", pos, line_end)
+                    return
+            if comment_hit:
+                continue
+            
+            string_hit = False
+            for sc in sorted(string_chars, key=len, reverse=True):
+                if line[i:].startswith(sc):
+                    end = line.find(sc, i + len(sc))
+                    if end == -1:
+                        end = len(line)
+                    else:
+                        end += len(sc)
+                    start_pos = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + i}"
+                    end_pos = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + end}"
+                    self.text_widget.tag_add("cb_string", start_pos, end_pos)
+                    i = end
+                    string_hit = True
+                    break
+            if string_hit:
+                continue
+            
+            if ch.isdigit() or (ch == '-' and i + 1 < len(line) and line[i + 1].isdigit()):
+                j = i
+                if ch == '-':
+                    j += 1
+                while j < len(line) and (line[j].isdigit() or line[j] == '.'):
+                    j += 1
+                start_pos = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + i}"
+                end_pos = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + j}"
+                self.text_widget.tag_add("cb_number", start_pos, end_pos)
+                i = j
+                continue
+            
+            if ch.isalpha() or ch == '_':
+                j = i
+                while j < len(line) and (line[j].isalnum() or line[j] == '_'):
+                    j += 1
+                word = line[i:j]
+                word_upper = word.upper()
+                start_pos = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + i}"
+                end_pos = f"{line_start.split('.')[0]}.{int(line_start.split('.')[1]) + 4 + j}"
+                
+                if word in keywords or word_upper in keywords:
+                    self.text_widget.tag_add("cb_keyword", start_pos, end_pos)
+                elif word in builtins:
+                    self.text_widget.tag_add("cb_function", start_pos, end_pos)
+                elif word[0].isupper():
+                    self.text_widget.tag_add("cb_class", start_pos, end_pos)
+                i = j
+                continue
+            
             i += 1
-        # Flush remaining text
-        if line_start < len(code):
-            self.text_widget.insert(tk.END, code[line_start:], "code_block")
 
 
     _LANG_KEYWORDS = {
@@ -493,7 +731,10 @@ class PopupWindow:
             self.top.destroy()
         except tk.TclError:
             pass
-        self.on_close(skip_next=skip_next, suppress=suppress)
+        try:
+            self.on_close(skip_next=skip_next, suppress=suppress)
+        except TypeError:
+            self.on_close()
 
 
 def show_popup(parent, item, on_review, on_close, on_link=None, on_edit=None):

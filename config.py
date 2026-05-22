@@ -11,6 +11,7 @@ DEFAULT_CONFIG = {
     "popup_expanded_height": 500,
     "max_items_per_check": 3,
     "primary_subject": "",
+    "last_viewed_version": "",
 }
 
 

@@ -64,6 +64,13 @@ def main():
     root = tk.Tk()
     root.withdraw()
 
+    icon_path = os.path.join(os.path.dirname(__file__), "ICON.png")
+    if os.path.exists(icon_path):
+        try:
+            root.iconbitmap(default=icon_path)
+        except Exception:
+            pass
+
     default_font = get_default_font()
     root.option_add("*Font", (default_font, 10))
 
@@ -88,6 +95,9 @@ def main():
     else:
         root.deiconify()
         root.geometry("950x650")
+        from updater import check_for_update, show_changelog_if_needed
+        check_for_update(root, silent=True)
+        root.after(800, lambda: show_changelog_if_needed(root))
         start_editor(root)
 
 
