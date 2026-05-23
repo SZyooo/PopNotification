@@ -162,5 +162,7 @@
   "editor.dialog_select_subject": "先に科目を選択してください",
   "editor.dialog_select_chapter": "先に章を選択してください",
   "editor.dialog_name_required": "名前を入力してください",
-  "editor.dialog_type_hint": "カードタイプ（ポップアップの配色に影響）:"
+  "editor.dialog_type_hint": "カードタイプ（ポップアップの配色に影響）:",
+  "editor.link_ambiguous": "リンクの曖昧性",
+  "editor.link_ambiguous_desc": "「{kw}」は複数の場所に存在します。選択してください:"
 }

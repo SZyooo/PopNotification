@@ -162,5 +162,7 @@
   "editor.dialog_select_subject": "Please select a subject first",
   "editor.dialog_select_chapter": "Please select a chapter first",
   "editor.dialog_name_required": "Name cannot be empty",
-  "editor.dialog_type_hint": "Card type (affects popup colors):"
+  "editor.dialog_type_hint": "Card type (affects popup colors):",
+  "editor.link_ambiguous": "Ambiguous Link",
+  "editor.link_ambiguous_desc": "「{kw}」exists in multiple locations, please choose:"
 }

@@ -162,5 +162,7 @@
   "editor.dialog_select_subject": "请先选择一个学科",
   "editor.dialog_select_chapter": "请先选择一个章节",
   "editor.dialog_name_required": "名称不能为空",
-  "editor.dialog_type_hint": "格式类型（影响弹出卡片的配色）:"
+  "editor.dialog_type_hint": "格式类型（影响弹出卡片的配色）:",
+  "editor.link_ambiguous": "链接歧义",
+  "editor.link_ambiguous_desc": "「{kw}」在多个位置存在，请选择要跳转的目标:"
 }

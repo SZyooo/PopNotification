@@ -341,32 +341,8 @@ class PopupWindow:
                         pin_display = pin_word.split("|", 1)[0] if "|" in pin_word else pin_word
                         tags = ("bullet", "pin") if bullet else ("pin",)
                         self.text_widget.insert(tk.END, f"📌 {pin_display}", tags)
-                    elif "|" in inner:
-                        keyword, display = inner.split("|", 1)
-                        if not keyword:
-                            keyword = display or inner
-                            display = keyword
-                        if not display:
-                            display = keyword or inner
-                        link_idx += 1
-                        tag = f"_link_{self._link_tag_counter}_{link_idx}"
-                        if self.on_link:
-                            self.text_widget.tag_config(tag, foreground="#2980b9", underline=1,
-                                                        font=("Microsoft YaHei", 10))
-                            bt = ("bullet", tag) if bullet else (tag,)
-                            self.text_widget.insert(tk.END, display, bt)
-                            self.text_widget.tag_bind(tag, "<Button-1>",
-                                lambda e, k=keyword: self.on_link(k))
-                            self.text_widget.tag_bind(tag, "<Enter>",
-                                lambda e: self.text_widget.config(cursor="hand2"))
-                            self.text_widget.tag_bind(tag, "<Leave>",
-                                lambda e: self.text_widget.config(cursor="hand2"))
-                        else:
-                            tags = ("bullet",) if bullet else ()
-                            self.text_widget.insert(tk.END, display, tags + ("normal",))
                     else:
-                        keyword = inner
-                        display = inner
+                        display = inner.split("|", 1)[1] if "|" in inner else inner
                         link_idx += 1
                         tag = f"_link_{self._link_tag_counter}_{link_idx}"
                         if self.on_link:
@@ -375,7 +351,7 @@ class PopupWindow:
                             bt = ("bullet", tag) if bullet else (tag,)
                             self.text_widget.insert(tk.END, display, bt)
                             self.text_widget.tag_bind(tag, "<Button-1>",
-                                lambda e, k=keyword: self.on_link(k))
+                                lambda e, t=tag, p=part: self._popup_on_link(p, t))
                             self.text_widget.tag_bind(tag, "<Enter>",
                                 lambda e: self.text_widget.config(cursor="hand2"))
                             self.text_widget.tag_bind(tag, "<Leave>",
@@ -412,6 +388,21 @@ class PopupWindow:
                     self.text_widget.insert(tk.END, part, tag)
             self.text_widget.insert(tk.END, "\n")
             i += 1
+
+    def _popup_on_link(self, link_text, tag):
+        from editor import parse_link
+        parsed = parse_link(link_text)
+        if not parsed or ("keyword" not in parsed and "pin" not in parsed):
+            return
+        if "subject" in parsed:
+            kw = f"{parsed['subject']}::{parsed['chapter']}::{parsed['keyword']}"
+        elif "keyword" in parsed:
+            kw = parsed["keyword"]
+        elif "pin" in parsed:
+            kw = parsed["pin"]
+        else:
+            return
+        self.on_link(kw)
 
     def _insert_image(self, img_path, alt_text=""):
         self.text_widget.insert(tk.END, "\n")

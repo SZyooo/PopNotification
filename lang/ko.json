@@ -162,5 +162,7 @@
   "editor.dialog_select_subject": "먼저 과목을 선택하세요",
   "editor.dialog_select_chapter": "먼저 장을 선택하세요",
   "editor.dialog_name_required": "이름을 입력하세요",
-  "editor.dialog_type_hint": "카드 유형（팝업 색상에 영향）:"
+  "editor.dialog_type_hint": "카드 유형（팝업 색상에 영향）:",
+  "editor.link_ambiguous": "링크 모호함",
+  "editor.link_ambiguous_desc": "「{kw}」이(가) 여러 위치에 있습니다. 선택하세요:"
 }

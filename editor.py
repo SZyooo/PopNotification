@@ -108,6 +108,26 @@ def expand_linkmap(text):
     return '\n'.join(result)
 
 
+def parse_link(link_text):
+    """Parse [[subject::chapter::keyword|display]] or [[keyword|display]] or [[pin:word]]
+
+    Returns dict with keys: keyword/subject/chapter/display, or pin for pins, or None.
+    """
+    import re
+    m = re.match(r'^\[\[([^:\]|]+)::([^:\]|]+)::([^\]|]+)(?:\|([^\]]+))?\]\]$', link_text)
+    if m:
+        kw = m.group(3)
+        return {"keyword": kw, "subject": m.group(1), "chapter": m.group(2), "display": m.group(4) or kw}
+    m = re.match(r'^\[\[pin:([^\]]+?)(?:\|[^\]]*)?\]\]$', link_text)
+    if m:
+        return {"pin": m.group(1)}
+    m = re.match(r'^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$', link_text)
+    if m:
+        kw = m.group(1)
+        return {"keyword": kw, "display": m.group(2) or kw}
+    return None
+
+
 class EditorWindow:
     def __init__(self, root, on_close_callback=None):
         self.root = root
@@ -799,7 +819,7 @@ class EditorWindow:
     def _on_results_mousewheel(self, event):
         self.related_results_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    # ---- Drag-and-drop ----
+    # ---- Drag-and-drop (reorder + link insertion) ----
     def _on_tree_press(self, event):
         item = self.tree.identify_row(event.y)
         if not item:
@@ -808,45 +828,75 @@ class EditorWindow:
         grandparent_id = self.tree.parent(parent_id) if parent_id else ""
         if not parent_id or not grandparent_id:
             return
-        self._drag_data = {"item": item, "start_y": event.y, "dragging": False, "target_item": None}
+        self._drag_data = {"item": item, "start_y": event.y, "start_x": event.x_root, "start_y_root": event.y_root,
+                           "dragging": False, "target_item": None}
         return "break"
 
     def _on_tree_drag(self, event):
         data = self._drag_data
         if not data["item"]:
             return
-        if abs(event.y - data["start_y"]) > 5:
+        if not data["dragging"] and abs(event.y - data["start_y"]) > 5:
             data["dragging"] = True
-            target = self.tree.identify_row(event.y)
-            if target and target != data["item"]:
-                t_parent = self.tree.parent(target)
-                t_grandparent = self.tree.parent(t_parent) if t_parent else ""
-                if not t_parent:
-                    new_target = None
-                elif not t_grandparent:
-                    new_target = target
-                else:
-                    new_target = t_parent
-            else:
+        if not data["dragging"]:
+            return
+        tx = self.knowledge_text.winfo_rootx()
+        ty = self.knowledge_text.winfo_rooty()
+        tw = self.knowledge_text.winfo_width()
+        th = self.knowledge_text.winfo_height()
+        if tx <= event.x_root <= tx + tw and ty <= event.y_root <= ty + th:
+            self.tree.config(cursor="plus")
+            self._clear_drag_highlight()
+            return
+        self.tree.config(cursor="")
+        target = self.tree.identify_row(event.y)
+        if target and target != data["item"]:
+            t_parent = self.tree.parent(target)
+            t_grandparent = self.tree.parent(t_parent) if t_parent else ""
+            if not t_parent:
                 new_target = None
-            if new_target and new_target != data.get("target_item"):
-                self._clear_drag_highlight()
-                self.tree.item(new_target, tags=("drag_target",))
-                data["target_item"] = new_target
-            elif not new_target:
-                self._clear_drag_highlight()
-                data["target_item"] = None
+            elif not t_grandparent:
+                new_target = target
+            else:
+                new_target = t_parent
+        else:
+            new_target = None
+        if new_target and new_target != data.get("target_item"):
+            self._clear_drag_highlight()
+            self.tree.item(new_target, tags=("drag_target",))
+            data["target_item"] = new_target
+        elif not new_target:
+            self._clear_drag_highlight()
+            data["target_item"] = None
 
     def _on_tree_release(self, event):
         data = self._drag_data
         item = data["item"]
-        if data["dragging"] and data["target_item"]:
-            self._clear_drag_highlight()
-            self._move_keyword_by_drag(item, data["target_item"])
+        self.tree.config(cursor="")
+        if data["dragging"]:
+            tx = self.knowledge_text.winfo_rootx()
+            ty = self.knowledge_text.winfo_rooty()
+            tw = self.knowledge_text.winfo_width()
+            th = self.knowledge_text.winfo_height()
+            if tx <= event.x_root <= tx + tw and ty <= event.y_root <= ty + th:
+                self._insert_link_from_tree(item)
+            elif data["target_item"]:
+                self._clear_drag_highlight()
+                self._move_keyword_by_drag(item, data["target_item"])
         elif item and not data["dragging"]:
             self.tree.selection_set(item)
         self._clear_drag_highlight()
         self._drag_data = {"item": None, "start_y": 0, "dragging": False, "target_item": None}
+
+    def _insert_link_from_tree(self, item):
+        kw = self._strip_emoji(self.tree.item(item, "text"))
+        parent_id = self.tree.parent(item)
+        grandparent_id = self.tree.parent(parent_id) if parent_id else ""
+        ch = self._strip_emoji(self.tree.item(parent_id, "text"))
+        subj = self._strip_emoji(self.tree.item(grandparent_id, "text"))
+        link = f"[[{subj}::{ch}::{kw}|{kw}]]"
+        self.knowledge_text.insert(tk.INSERT, link)
+        self._dirty = True
 
     def _move_keyword_by_drag(self, item, target_item):
         parent_id = self.tree.parent(item)
@@ -1302,7 +1352,7 @@ class EditorWindow:
         import re
         kw_escaped = re.escape(keyword)
         display_escaped = re.escape(display)
-        pattern = rf'\[\[{kw_escaped}(\|{display_escaped})?\]\]'
+        pattern = rf'\[\[(?:[^:|]+::[^:|]+::)?{kw_escaped}(\|{display_escaped})?\]\]'
         text = self.knowledge_text.get("1.0", tk.END).strip()
         new_text = re.sub(pattern, '', text, count=1).strip()
         if new_text == text:
@@ -1407,7 +1457,7 @@ class EditorWindow:
                 elif kw_map[kw][0] != self.current_subject and subj == self.current_subject:
                     kw_map[kw] = (subj, ch)
         auto_kws = set()
-        for m in re.finditer(r'\[\[([^\]|]+)(?:\|([^\]]+))?\]\]', knowledge_text):
+        for m in re.finditer(r'\[\[(?:[^:\]|]+::[^:\]|]+::)?([^\]|]+)(?:\|([^\]]+))?\]\]', knowledge_text):
             target_kw = m.group(1)
             if target_kw in kw_map:
                 auto_kws.add(target_kw)
@@ -1532,23 +1582,12 @@ class EditorWindow:
                         pin_display = pin_word.split("|", 1)[0] if "|" in pin_word else pin_word
                         tags = ("r_bullet", "r_pin") if bullet else ("r_pin",)
                         self.knowledge_text.insert(tk.END, f"📌 {pin_display}", tags)
-                    elif "|" in inner:
-                        kw, display = inner.split("|", 1)
-                        link_idx += 1
-                        tag = f"_r_link_{link_base}_{link_idx}"
-                        self.knowledge_text.tag_config(tag, foreground="#2980b9", underline=1, font=("Microsoft YaHei", 10))
-                        self.knowledge_text.tag_bind(tag, "<Button-1>", lambda e, k=kw: self.navigate_to_keyword(k))
-                        self.knowledge_text.tag_bind(tag, "<Enter>", lambda e: self.knowledge_text.config(cursor="hand2"))
-                        self.knowledge_text.tag_bind(tag, "<Leave>", lambda e: self.knowledge_text.config(cursor=""))
-                        tags = ("r_bullet", tag) if bullet else (tag,)
-                        self.knowledge_text.insert(tk.END, display, tags)
                     else:
-                        kw = inner
-                        display = inner
+                        display = inner.split("|", 1)[1] if "|" in inner else inner
                         link_idx += 1
                         tag = f"_r_link_{link_base}_{link_idx}"
                         self.knowledge_text.tag_config(tag, foreground="#2980b9", underline=1, font=("Microsoft YaHei", 10))
-                        self.knowledge_text.tag_bind(tag, "<Button-1>", lambda e, k=kw: self.navigate_to_keyword(k))
+                        self.knowledge_text.tag_bind(tag, "<Button-1>", lambda e, t=tag, p=part: self._on_link_click(p, t))
                         self.knowledge_text.tag_bind(tag, "<Enter>", lambda e: self.knowledge_text.config(cursor="hand2"))
                         self.knowledge_text.tag_bind(tag, "<Leave>", lambda e: self.knowledge_text.config(cursor=""))
                         tags = ("r_bullet", tag) if bullet else (tag,)
@@ -2072,6 +2111,13 @@ class EditorWindow:
             pass
 
     def navigate_to_keyword(self, keyword):
+        if "::" in keyword:
+            parts = keyword.split("::", 2)
+            if len(parts) == 3:
+                self._nav_visit()
+                self._nav_ignore = True
+                self._select_keyword_in_tree(parts[2], parts[0], parts[1])
+                return
         best = None
         for item in self.tree.get_children(""):
             for child in self.tree.get_children(item):
@@ -2098,6 +2144,72 @@ class EditorWindow:
             self.tree.item(child, open=True)
             self.tree.selection_set(grand)
             self.tree.see(grand)
+
+    def _on_link_click(self, link_text, tag):
+        parsed = parse_link(link_text)
+        if not parsed or "keyword" not in parsed:
+            return
+        keyword = parsed["keyword"]
+        subject = parsed.get("subject")
+        chapter = parsed.get("chapter")
+        if subject and chapter:
+            self._nav_visit()
+            self._nav_ignore = True
+            self._select_keyword_in_tree(keyword, subject, chapter)
+            return
+        candidates = []
+        for item in self.tree.get_children(""):
+            for child in self.tree.get_children(item):
+                for grand in self.tree.get_children(child):
+                    if self._strip_emoji(self.tree.item(grand, "text")) == keyword:
+                        subj = self._strip_emoji(self.tree.item(item, "text"))
+                        ch = self._strip_emoji(self.tree.item(child, "text"))
+                        candidates.append((subj, ch, keyword))
+        if len(candidates) == 1:
+            self._nav_visit()
+            self._nav_ignore = True
+            self._select_keyword_in_tree(keyword, candidates[0][0], candidates[0][1])
+        elif len(candidates) > 1:
+            self._show_link_disambiguation(link_text, tag, keyword, candidates)
+
+    def _show_link_disambiguation(self, link_text, tag, keyword, candidates):
+        dialog = tk.Toplevel(self.root)
+        dialog.title(tr("editor.link_ambiguous"))
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        tk.Label(dialog, text=tr("editor.link_ambiguous_desc").format(kw=keyword),
+                 font=("Microsoft YaHei", 10)).pack(pady=(10, 4))
+        lb = tk.Listbox(dialog, font=("Microsoft YaHei", 10), width=50, height=min(len(candidates), 8))
+        lb.pack(padx=16, fill=tk.BOTH, expand=True)
+        for subj, ch, _ in candidates:
+            lb.insert(tk.END, f"{subj} › {ch} › {keyword}")
+        def confirm():
+            sel = lb.curselection()
+            if not sel:
+                return
+            subj, ch, _ = candidates[sel[0]]
+            self._rewrite_link(link_text, tag, subj, ch, keyword)
+            self._nav_visit()
+            self._nav_ignore = True
+            self._select_keyword_in_tree(keyword, subj, ch)
+            dialog.destroy()
+        tk.Button(dialog, text=tr("app.confirm"), font=("Microsoft YaHei", 10),
+                  command=confirm).pack(pady=(8, 10))
+        dialog.bind("<Return>", lambda e: confirm())
+        lb.select_set(0)
+        dialog.focus_set()
+
+    def _rewrite_link(self, old_link_text, tag, subject, chapter, keyword):
+        ranges = self.knowledge_text.tag_ranges(tag)
+        if not ranges:
+            return
+        start, end = ranges[0], ranges[1]
+        display = self.knowledge_text.get(start, end)
+        new_link = f"[[{subject}::{chapter}::{keyword}|{display}]]"
+        self.knowledge_text.delete(start, end)
+        self.knowledge_text.insert(start, new_link)
+        self._dirty = True
 
     def _refresh_primary_subjects(self):
         from config import load_config
