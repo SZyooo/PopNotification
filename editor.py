@@ -2196,6 +2196,7 @@ class EditorWindow:
             if not sel:
                 return
             subj, ch, _ = candidates[sel[0]]
+            dialog.destroy()
             self._rewrite_link(link_text, tag, subj, ch, keyword)
             if self.current_subject and self.current_chapter and self.current_keyword:
                 current_text = self.knowledge_text.get("1.0", tk.END).strip()
@@ -2206,7 +2207,6 @@ class EditorWindow:
             self._nav_visit()
             self._nav_ignore = True
             self._select_keyword_in_tree(keyword, subj, ch)
-            dialog.destroy()
         tk.Button(dialog, text=tr("app.confirm"), font=("Microsoft YaHei", 10),
                   command=confirm).pack(pady=(8, 10))
         dialog.bind("<Return>", lambda e: confirm())
@@ -2216,25 +2216,23 @@ class EditorWindow:
         self._center_dialog(dialog, 420, 280)
 
     def _rewrite_link(self, old_link_text, tag, subject, chapter, keyword):
-        ranges = self.knowledge_text.tag_ranges(tag)
-        if not ranges:
-            return
-        start, end = ranges[0], ranges[1]
-        display = self.knowledge_text.get(start, end)
+        import re
+        full = self.knowledge_text.get("1.0", tk.END)
+        m = re.match(r'\[\[(?:[^:\]|]+::[^:\]|]+::)?([^\]|]+)(?:\|([^\]]+))?\]\]', old_link_text)
+        display = m.group(2) or m.group(1) if m else keyword
         new_link = f"[[{subject}::{chapter}::{keyword}|{display}]]"
-        if self._read_mode:
-            full = self.knowledge_text.get("1.0", tk.END)
-            updated = full.replace(old_link_text, new_link, 1)
+        updated = full.replace(old_link_text, new_link, 1)
+        if updated == full:
+            return
+        was_disabled = self.knowledge_text.cget("state") == tk.DISABLED
+        if was_disabled:
+            self.knowledge_text.config(state=tk.NORMAL)
+        self.knowledge_text.delete("1.0", tk.END)
+        self.knowledge_text.insert("1.0", updated)
+        if was_disabled:
             self._raw_knowledge = updated.strip()
-            was_disabled = self.knowledge_text.cget("state") == tk.DISABLED
-            if was_disabled:
-                self.knowledge_text.config(state=tk.NORMAL)
-            self.knowledge_text.delete("1.0", tk.END)
-            self.knowledge_text.insert("1.0", self._raw_knowledge)
             self.knowledge_text.config(state=tk.DISABLED)
         else:
-            self.knowledge_text.delete(start, end)
-            self.knowledge_text.insert(start, new_link)
             self._dirty = True
 
     def _refresh_primary_subjects(self):
