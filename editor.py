@@ -2028,9 +2028,15 @@ class EditorWindow:
         self.image_status_label.config(text=f"✓ 图片 \"{filename}\" 已添加")
         self.root.after(3000, lambda: self.image_status_label.config(text=""))
 
-    def _select_keyword_in_tree(self, keyword):
+    def _select_keyword_in_tree(self, keyword, subject=None, chapter=None):
+        subject = subject or self.current_subject
+        chapter = chapter or self.current_chapter
         for item in self.tree.get_children(""):
+            if subject and self._strip_emoji(self.tree.item(item, "text")) != subject:
+                continue
             for child in self.tree.get_children(item):
+                if chapter and self._strip_emoji(self.tree.item(child, "text")) != chapter:
+                    continue
                 for grand in self.tree.get_children(child):
                     if self._strip_emoji(self.tree.item(grand, "text")) == keyword:
                         self.tree.item(item, open=True)
