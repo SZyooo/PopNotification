@@ -1401,6 +1401,11 @@ class EditorWindow:
         for subj, ch, kw in all_items:
             if kw not in kw_map:
                 kw_map[kw] = (subj, ch)
+            elif kw_map[kw] != (self.current_subject, self.current_chapter):
+                if subj == self.current_subject and ch == self.current_chapter:
+                    kw_map[kw] = (subj, ch)
+                elif kw_map[kw][0] != self.current_subject and subj == self.current_subject:
+                    kw_map[kw] = (subj, ch)
         auto_kws = set()
         for m in re.finditer(r'\[\[([^\]|]+)(?:\|([^\]]+))?\]\]', knowledge_text):
             target_kw = m.group(1)
@@ -2067,9 +2072,32 @@ class EditorWindow:
             pass
 
     def navigate_to_keyword(self, keyword):
-        self._nav_visit()
-        self._nav_ignore = True
-        self._select_keyword_in_tree(keyword)
+        best = None
+        for item in self.tree.get_children(""):
+            for child in self.tree.get_children(item):
+                for grand in self.tree.get_children(child):
+                    if self._strip_emoji(self.tree.item(grand, "text")) == keyword:
+                        subj = self._strip_emoji(self.tree.item(item, "text"))
+                        ch = self._strip_emoji(self.tree.item(child, "text"))
+                        candidate = (item, child, grand, subj, ch)
+                        if best is None:
+                            best = candidate
+                        s = candidate[3], candidate[4]
+                        bs = best[3], best[4]
+                        if (s[0] == self.current_subject and s[1] == self.current_chapter):
+                            best = candidate
+                            break
+                        elif bs[0] != self.current_subject or bs[1] != self.current_chapter:
+                            if s[0] == self.current_subject:
+                                best = candidate
+        if best:
+            self._nav_visit()
+            self._nav_ignore = True
+            item, child, grand = best[:3]
+            self.tree.item(item, open=True)
+            self.tree.item(child, open=True)
+            self.tree.selection_set(grand)
+            self.tree.see(grand)
 
     def _refresh_primary_subjects(self):
         from config import load_config
