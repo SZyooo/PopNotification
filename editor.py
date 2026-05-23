@@ -2197,6 +2197,12 @@ class EditorWindow:
                 return
             subj, ch, _ = candidates[sel[0]]
             self._rewrite_link(link_text, tag, subj, ch, keyword)
+            if self.current_subject and self.current_chapter and self.current_keyword:
+                current_text = self.knowledge_text.get("1.0", tk.END).strip()
+                self.db.save_keyword(
+                    self.current_subject, self.current_chapter, self.current_keyword,
+                    current_text, self.current_type
+                )
             self._nav_visit()
             self._nav_ignore = True
             self._select_keyword_in_tree(keyword, subj, ch)
