@@ -1519,12 +1519,14 @@ class EditorWindow:
                                         foreground=default_fg, underline=1)
         self.knowledge_text.tag_config("r_strikethrough", font=("Microsoft YaHei", 10),
                                         foreground=default_fg, overstrike=1)
+        self.knowledge_text.tag_config("r_link_gap", foreground=default_fg)
         self._link_tag_counter = getattr(self, "_link_tag_counter", 0) + 1
         link_base = self._link_tag_counter
         pattern = r'(!\[.*?\]\([^)]+\)|\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|~~.*?~~|__.*?__|~.*?~|//.*?//|`.*?`)'
         link_idx = 0
         lines = text.split("\n")
         i = 0
+        prev_was_link = False
         while i < len(lines):
             line = lines[i]
             stripped = line.strip()
@@ -1568,6 +1570,7 @@ class EditorWindow:
                     heading_tag = "r_h1"
                     rest = rest[2:]
             parts = _re.split(pattern, rest)
+            prev_was_link = False
             for part in parts:
                 if part.startswith("![") and part.endswith(")"):
                     match = _re.match(r'!\[(.*?)\]\((.+)\)', part)
@@ -1584,6 +1587,9 @@ class EditorWindow:
                         self.knowledge_text.insert(tk.END, f"📌 {pin_display}", tags)
                     else:
                         display = inner.split("|", 1)[1] if "|" in inner else inner
+                        if prev_was_link:
+                            self.knowledge_text.insert(tk.END, "\u2009", "r_link_gap")
+                        prev_was_link = True
                         link_idx += 1
                         tag = f"_r_link_{link_base}_{link_idx}"
                         self.knowledge_text.tag_config(tag, foreground="#2980b9", underline=1, font=("Microsoft YaHei", 10))
@@ -1617,6 +1623,7 @@ class EditorWindow:
                     tags = ("r_bullet", "r_code") if bullet else ("r_code",)
                     self.knowledge_text.insert(tk.END, part[1:-1].replace(" ", "\u00a0"), tags)
                 elif part:
+                    prev_was_link = False
                     tag = heading_tag or ("r_bullet" if bullet else "r_normal")
                     self.knowledge_text.insert(tk.END, part, tag)
             self.knowledge_text.insert(tk.END, "\n")
@@ -2199,6 +2206,7 @@ class EditorWindow:
         dialog.bind("<Return>", lambda e: confirm())
         lb.select_set(0)
         dialog.focus_set()
+        self._center_dialog(dialog, 420, 280)
 
     def _rewrite_link(self, old_link_text, tag, subject, chapter, keyword):
         ranges = self.knowledge_text.tag_ranges(tag)
@@ -2207,9 +2215,20 @@ class EditorWindow:
         start, end = ranges[0], ranges[1]
         display = self.knowledge_text.get(start, end)
         new_link = f"[[{subject}::{chapter}::{keyword}|{display}]]"
-        self.knowledge_text.delete(start, end)
-        self.knowledge_text.insert(start, new_link)
-        self._dirty = True
+        if self._read_mode:
+            full = self.knowledge_text.get("1.0", tk.END)
+            updated = full.replace(old_link_text, new_link, 1)
+            self._raw_knowledge = updated.strip()
+            was_disabled = self.knowledge_text.cget("state") == tk.DISABLED
+            if was_disabled:
+                self.knowledge_text.config(state=tk.NORMAL)
+            self.knowledge_text.delete("1.0", tk.END)
+            self.knowledge_text.insert("1.0", self._raw_knowledge)
+            self.knowledge_text.config(state=tk.DISABLED)
+        else:
+            self.knowledge_text.delete(start, end)
+            self.knowledge_text.insert(start, new_link)
+            self._dirty = True
 
     def _refresh_primary_subjects(self):
         from config import load_config
