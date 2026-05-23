@@ -64,5 +64,9 @@ echo   All files downloaded to %OFFLINE_DIR%/
 echo.
 echo   Copy this folder to the target computer, then run:
 echo     install.bat
+echo.
+echo   To build exe, after install.bat completes:
+echo     python build_exe.py
+echo   The exe will be in dist/PopNotification/
 echo ============================================
 pause
