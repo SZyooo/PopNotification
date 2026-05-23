@@ -25,6 +25,7 @@ if "%PYTHON_SUFFIX%"=="-amd64" (set PYTHON_LABEL=amd64) else (set PYTHON_LABEL=w
 
 if exist "%OFFLINE_DIR%\%INSTALLER%" (
     echo [SKIP] %INSTALLER% already exists.
+    ver >nul
 ) else (
     echo Downloading...
     powershell -NoProfile -Command "try { $wc=New-Object System.Net.WebClient; Write-Host 'Downloading Python %PYTHON_VERSION% (%PYTHON_LABEL%)...'; $wc.DownloadFile('%PYTHON_URL%', '%OFFLINE_DIR%\%INSTALLER%'); Write-Host 'OK' } catch { Write-Host 'FAILED: ' + $_.Exception.Message; exit 1 }"
