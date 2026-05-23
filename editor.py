@@ -10,6 +10,33 @@ from i18n import tr, load_language, get_language, LANGUAGES
 from popup_window import PopupWindow
 
 
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip = None
+        widget.bind("<Enter>", self._enter)
+        widget.bind("<Leave>", self._leave)
+
+    def _enter(self, event):
+        x = self.widget.winfo_rootx() + self.widget.winfo_width()
+        y = self.widget.winfo_rooty() - 4
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        lbl = tk.Label(self.tip, text=self.text, font=("Microsoft YaHei", 9),
+                       bg="#ffffcc", fg="#333", relief=tk.SOLID, borderwidth=1,
+                       padx=6, pady=2)
+        lbl.pack()
+        self.tip.update_idletasks()
+        tw = lbl.winfo_reqwidth() + 12
+        self.tip.wm_geometry(f"+{x - tw}+{y}")
+
+    def _leave(self, event):
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
+
 TYPE_OPTIONS = [
     ("popup.type_normal", "normal", "#3498db", "popup.type_normal_desc"),
     ("popup.type_tip", "tip", "#1abc9c", "popup.type_tip_desc"),
@@ -105,6 +132,7 @@ class EditorWindow:
         self._selected_result_idx = -1
         self._preview_popup = None
         self._search_after_id = None
+        self._related_sync_after_id = None
         self.search_var = tk.StringVar(value="")
         self._build_ui()
         self._refresh_tree()
@@ -169,15 +197,34 @@ class EditorWindow:
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.tree.bind("<Button-3>", self._on_tree_right_click)
 
+        # Drag-and-drop state
+        self._drag_data = {"item": None, "start_y": 0, "dragging": False, "target_item": None}
+        self.tree.tag_configure("drag_target", background="#a8e6a8")
+        self.tree.bind("<Button-1>", self._on_tree_press, True)
+        self.tree.bind("<B1-Motion>", self._on_tree_drag)
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_release)
+
         self._add_btn_frame = tk.Frame(left_frame)
         self._add_btn_frame.pack(fill=tk.X, pady=(4, 0))
 
-        self.btn_add_subject = tk.Button(self._add_btn_frame, text=tr("editor.add_subject"), font=("Microsoft YaHei", 9),
-                                          command=self._add_subject_dialog)
-        self.btn_add_chapter = tk.Button(self._add_btn_frame, text=tr("editor.add_chapter"), font=("Microsoft YaHei", 9),
-                                          command=self._add_chapter_dialog)
-        self.btn_add_keyword = tk.Button(self._add_btn_frame, text=tr("editor.add_keyword"), font=("Microsoft YaHei", 9),
-                                          command=self._add_keyword_dialog)
+        def _make_icon_btn(parent, icon, tooltip, cmd):
+            btn = tk.Button(parent, text=icon, font=("Microsoft YaHei", 12),
+                            command=cmd, width=3, relief=tk.RAISED, bd=1,
+                            cursor="hand2", bg="#f0f0f0", activebackground="#d4e6f1")
+            def on_enter(e):
+                btn.config(bg="#d4e6f1", relief=tk.RIDGE)
+            def on_leave(e):
+                btn.config(bg="#f0f0f0", relief=tk.RAISED)
+            btn.bind("<Enter>", on_enter)
+            btn.bind("<Leave>", on_leave)
+            ToolTip(btn, tooltip)
+            return btn
+        self.btn_add_subject = _make_icon_btn(self._add_btn_frame, "📚", tr("editor.add_subject"), self._add_subject_dialog)
+        self.btn_add_chapter = _make_icon_btn(self._add_btn_frame, "📖", tr("editor.add_chapter"), self._add_chapter_dialog)
+        self.btn_add_keyword = _make_icon_btn(self._add_btn_frame, "💡", tr("editor.add_keyword"), self._add_keyword_dialog)
+        ToolTip(self.btn_add_subject, tr("editor.add_subject"))
+        ToolTip(self.btn_add_chapter, tr("editor.add_chapter"))
+        ToolTip(self.btn_add_keyword, tr("editor.add_keyword"))
 
         tk.Button(self._add_btn_frame, text=tr("editor.rename_btn"), font=("Microsoft YaHei", 9),
                   command=self._rename_selected).pack(side=tk.RIGHT, padx=1)
@@ -219,36 +266,9 @@ class EditorWindow:
         self._update_path_label()
 
     def _build_form(self, parent):
-        scroll_area = tk.Frame(parent, bg="#fafafa")
-        scroll_area.pack(fill=tk.BOTH, expand=True)
-
-        self.form_canvas = tk.Canvas(scroll_area, bg="#fafafa", highlightthickness=0)
-        self.form_scrollbar = ttk.Scrollbar(scroll_area, orient=tk.VERTICAL,
-                                            command=self.form_canvas.yview)
-        self.form_canvas.configure(yscrollcommand=self.form_scrollbar.set)
-
-        self.form_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.form_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.form_container = tk.Frame(self.form_canvas, bg="#fafafa")
-        self.form_canvas.create_window((0, 0), window=self.form_container, anchor="nw",
-                                        tags="form_window")
-
-        def _on_canvas_configure(event):
-            self.form_canvas.itemconfig("form_window", width=event.width, height=event.height)
-            self.after(100, self._check_form_overflow)
-        self.form_canvas.bind("<Configure>", _on_canvas_configure)
-
-        def _on_container_configure(event):
-            self.form_canvas.configure(scrollregion=self.form_canvas.bbox("all"))
-        self.form_container.bind("<Configure>", _on_container_configure)
-
-        def _on_mousewheel(event):
-            self.form_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        self.form_container.bind("<Enter>", lambda e: self.form_container.bind_all(
-            "<MouseWheel>", _on_mousewheel))
-        self.form_container.bind("<Leave>", lambda e: self.form_container.unbind_all(
-            "<MouseWheel>"))
+        # Main content area (fills all space above the fixed bottom frame)
+        self.form_container = tk.Frame(parent, bg="#fafafa")
+        self.form_container.grid(row=0, column=0, sticky="nsew")
 
         self.empty_label = tk.Label(
             self.form_container, text=tr("editor.empty_select"),
@@ -289,18 +309,25 @@ class EditorWindow:
         self.knowledge_text = tk.Text(text_frame, font=("Microsoft YaHei", 10),
                                        wrap=tk.WORD, relief=tk.SUNKEN, borderwidth=1,
                                        undo=True)
+        self.text_scrollbar_y = tk.Scrollbar(text_frame, orient=tk.VERTICAL, width=16,
+                                               command=self.knowledge_text.yview)
+        # Pack scrollbar first so it anchors to the right edge
+        self.text_scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
         self.knowledge_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.knowledge_text.bind("<KeyRelease>", lambda e: setattr(self, '_dirty', True))
+        self.knowledge_text.configure(yscrollcommand=self._on_text_scroll_y)
+        self.knowledge_text.bind("<KeyRelease>", self._on_knowledge_change)
         self.knowledge_text.bind("<Return>", self._on_enter_in_knowledge)
 
-        self.text_scrollbar_y = ttk.Scrollbar(text_frame, orient=tk.VERTICAL,
-                                               command=self.knowledge_text.yview)
-        self.knowledge_text.configure(yscrollcommand=self._on_text_scroll_y)
-        self.text_scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        # Bottom frame (always visible, contains related topics + bottom bar)
+        self.bottom_frame = tk.Frame(parent, bg="#e8f4f8")
+        self.bottom_frame.grid(row=1, column=0, sticky="ew")
 
-        # Related Topics Drawer container (bottom of form)
-        self.related_outer = tk.Frame(self.form_frame, bg="#e8f4f8")
-        self.related_outer.pack(fill=tk.X, side=tk.BOTTOM)
+        # Configure parent grid so form row stretches, bottom row stays at natural height
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
+
+        # Related Topics Drawer container (fixed position, not scrollable)
+        self.related_outer = tk.Frame(self.bottom_frame, bg="#e8f4f8")
         self._related_drawer_open = False
 
         # Drawer content panel (above the toggle bar, hidden by default)
@@ -329,7 +356,7 @@ class EditorWindow:
             self.related_canvas.itemconfig("related_window", width=event.width)
         self.related_canvas.bind("<Configure>", _on_related_canvas_configure)
 
-        self.related_canvas.pack(side=tk.LEFT, fill=tk.X)
+        self.related_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.related_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Results panel
@@ -414,7 +441,7 @@ class EditorWindow:
         self.dir_inner.pack(fill=tk.BOTH, expand=True)
 
         # Bottom bar container with fixed height
-        self.bottom_bar_container = tk.Frame(parent, bg="#fff8e1", height=32)
+        self.bottom_bar_container = tk.Frame(self.bottom_frame, bg="#fff8e1", height=32)
         self.bottom_bar_container.pack(fill=tk.X, side=tk.BOTTOM)
         self.bottom_bar_container.pack_propagate(False)
 
@@ -521,7 +548,7 @@ class EditorWindow:
             return
         bg = self._bottom_frame.cget("bg")
         self._git_url_label = tk.Label(
-            self._bottom_frame, text=f"远程仓库: {url}",
+            self._bottom_frame, text=tr("editor.git_remote_url").format(url=url),
             font=("Microsoft YaHei", 8), fg="#555", bg=bg,
         )
         self._git_url_label.pack(side=tk.RIGHT, padx=(4, 0))
@@ -765,19 +792,87 @@ class EditorWindow:
 
     def _on_text_scroll_y(self, first, last):
         self.text_scrollbar_y.set(first, last)
-        try:
-            if first == "0.0" and last == "1.0":
-                self.text_scrollbar_y.pack_forget()
-            else:
-                self.text_scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
-        except tk.TclError:
-            pass
 
     def _on_results_scroll(self, first, last):
         pass
 
     def _on_results_mousewheel(self, event):
         self.related_results_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    # ---- Drag-and-drop ----
+    def _on_tree_press(self, event):
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        parent_id = self.tree.parent(item)
+        grandparent_id = self.tree.parent(parent_id) if parent_id else ""
+        if not parent_id or not grandparent_id:
+            return
+        self._drag_data = {"item": item, "start_y": event.y, "dragging": False, "target_item": None}
+        return "break"
+
+    def _on_tree_drag(self, event):
+        data = self._drag_data
+        if not data["item"]:
+            return
+        if abs(event.y - data["start_y"]) > 5:
+            data["dragging"] = True
+            target = self.tree.identify_row(event.y)
+            if target and target != data["item"]:
+                t_parent = self.tree.parent(target)
+                t_grandparent = self.tree.parent(t_parent) if t_parent else ""
+                if not t_parent:
+                    new_target = None
+                elif not t_grandparent:
+                    new_target = target
+                else:
+                    new_target = t_parent
+            else:
+                new_target = None
+            if new_target and new_target != data.get("target_item"):
+                self._clear_drag_highlight()
+                self.tree.item(new_target, tags=("drag_target",))
+                data["target_item"] = new_target
+            elif not new_target:
+                self._clear_drag_highlight()
+                data["target_item"] = None
+
+    def _on_tree_release(self, event):
+        data = self._drag_data
+        item = data["item"]
+        if data["dragging"] and data["target_item"]:
+            self._clear_drag_highlight()
+            self._move_keyword_by_drag(item, data["target_item"])
+        elif item and not data["dragging"]:
+            self.tree.selection_set(item)
+        self._clear_drag_highlight()
+        self._drag_data = {"item": None, "start_y": 0, "dragging": False, "target_item": None}
+
+    def _move_keyword_by_drag(self, item, target_item):
+        parent_id = self.tree.parent(item)
+        grandparent_id = self.tree.parent(parent_id) if parent_id else ""
+        keyword_name = self._strip_emoji(self.tree.item(item, "text"))
+        source_chapter = self._strip_emoji(self.tree.item(parent_id, "text"))
+        source_subject = self._strip_emoji(self.tree.item(grandparent_id, "text"))
+        t_parent = self.tree.parent(target_item)
+        target_chapter = self._strip_emoji(self.tree.item(target_item, "text"))
+        target_subject = self._strip_emoji(self.tree.item(t_parent, "text"))
+        if source_subject == target_subject and source_chapter == target_chapter:
+            return
+        success = self.db.move_keyword(source_subject, source_chapter, keyword_name, target_subject, target_chapter)
+        if success:
+            self._refresh_tree()
+            self._select_keyword_in_tree(keyword_name)
+        else:
+            messagebox.showerror(tr("app.error"), tr("editor.move_failed").format(kw=keyword_name))
+
+    def _clear_drag_highlight(self):
+        ti = self._drag_data.get("target_item")
+        if ti:
+            try:
+                self.tree.item(ti, tags=())
+            except tk.TclError:
+                pass
 
     def _on_tree_select(self, event):
         sel = self.tree.selection()
@@ -1061,11 +1156,11 @@ class EditorWindow:
             w.destroy()
         if not self._all_related_items:
             self.related_results_outer.pack_forget()
-            self._update_add_button(False, "无其他可添加话题")
+            self._update_add_button(False, tr("editor.related_no_more"))
             return
         if not query:
             self.related_results_outer.pack_forget()
-            self._update_add_button(False, "输入关键词名称以搜索")
+            self._update_add_button(False, tr("editor.related_search_hint"))
             return
         ql = query.lower()
         scored = []
@@ -1077,7 +1172,7 @@ class EditorWindow:
         matches = [(s, c, k) for _, s, c, k in scored]
         if not matches:
             self.related_results_outer.pack_forget()
-            self._update_add_button(False, "未找到匹配的知识点")
+            self._update_add_button(False, tr("editor.related_not_found"))
             return
         self.related_results_outer.pack(fill=tk.X, pady=(0, 4))
         self._related_matches = matches
@@ -1183,6 +1278,9 @@ class EditorWindow:
         self._related_topics.append({
             "subject": subj, "chapter": ch, "keyword": kw, "display": display
         })
+        if not self._related_drawer_open:
+            self._related_drawer_open = True
+            self.related_drawer.pack(fill=tk.X, side=tk.BOTTOM)
         self._render_related_topics()
         self._refresh_related_search()
         self._update_related_count()
@@ -1190,11 +1288,34 @@ class EditorWindow:
 
     def _on_related_remove(self, idx):
         if 0 <= idx < len(self._related_topics):
+            rel = self._related_topics[idx]
+            kw = rel.get("keyword", "")
+            display = rel.get("display", kw)
             self._related_topics.pop(idx)
+            self._remove_link_from_knowledge(kw, display)
             self._render_related_topics()
             self._refresh_related_search()
             self._update_related_count()
             self._save_related_now()
+
+    def _remove_link_from_knowledge(self, keyword, display):
+        import re
+        kw_escaped = re.escape(keyword)
+        display_escaped = re.escape(display)
+        pattern = rf'\[\[{kw_escaped}(\|{display_escaped})?\]\]'
+        text = self.knowledge_text.get("1.0", tk.END).strip()
+        new_text = re.sub(pattern, '', text, count=1).strip()
+        if new_text == text:
+            return
+        was_read = self._read_mode
+        if was_read:
+            self.knowledge_text.config(state=tk.NORMAL)
+        self.knowledge_text.delete("1.0", tk.END)
+        self.knowledge_text.insert("1.0", new_text)
+        self._dirty = True
+        if was_read:
+            self._raw_knowledge = new_text
+            self._switch_to_read_mode()
 
     def _save_related_now(self):
         if not self.current_subject or not self.current_chapter or not self.current_keyword:
@@ -1208,11 +1329,15 @@ class EditorWindow:
         )
 
     def _render_related_topics(self):
+        self.related_outer.update_idletasks()
+        cw = self.related_canvas.winfo_width()
+        if cw > 1:
+            self.related_canvas.itemconfig("related_window", width=cw)
         for w in self.related_list_inner.winfo_children():
             w.destroy()
         toggle_h = 30
         if not self._related_topics:
-            tk.Label(self.related_list_inner, text="暂无相关话题", font=("Microsoft YaHei", 9),
+            tk.Label(self.related_list_inner, text=tr("editor.related_none"), font=("Microsoft YaHei", 9),
                      fg="#bbb", bg="#e8f4f8").pack(anchor=tk.W, padx=6, pady=6)
             self.related_canvas.configure(height=28)
             self.related_scrollbar.pack_forget()
@@ -1220,9 +1345,9 @@ class EditorWindow:
             return
         for i, rel in enumerate(self._related_topics):
             card = tk.Frame(self.related_list_inner, bg="#fff", relief=tk.FLAT, bd=0)
-            card.pack(fill=tk.X, pady=2, padx=4)
+            card.pack(fill=tk.X, pady=2, padx=2)
             inner = tk.Frame(card, bg="#fff")
-            inner.pack(fill=tk.X, padx=10, pady=5)
+            inner.pack(fill=tk.X, padx=6, pady=4)
             subj = rel.get("subject", "")
             ch = rel.get("chapter", "")
             kw = rel.get("keyword", "")
@@ -1235,9 +1360,9 @@ class EditorWindow:
             path_lbl.pack(fill=tk.X)
             link_lbl.bind("<Button-1>", lambda e, k=kw: self.navigate_to_keyword(k))
             remove_btn = tk.Button(card, text="✕", font=("Microsoft YaHei", 8), fg="#e74c3c",
-                                   bg="#fff", relief=tk.FLAT, padx=6, pady=2, cursor="hand2",
+                                   bg="#fff", relief=tk.FLAT, padx=4, pady=2, cursor="hand2",
                                    command=lambda idx=i: self._on_related_remove(idx))
-            remove_btn.place(relx=1.0, rely=0.5, anchor=tk.E, x=-6)
+            remove_btn.place(relx=1.0, rely=0.5, anchor=tk.E, x=-3)
             for w in [card, inner]:
                 w.bind("<Enter>", lambda e, c=card: c.configure(bg="#f0f7ff"))
                 w.bind("<Leave>", lambda e, c=card: c.configure(bg="#fff"))
@@ -1257,20 +1382,12 @@ class EditorWindow:
         self._related_drawer_open = not self._related_drawer_open
         if self._related_drawer_open:
             self.related_drawer.pack(fill=tk.X, side=tk.BOTTOM)
-            self.related_toggle_btn.config(text="▾ 相关话题")
+            self.related_toggle_btn.config(text="▾ " + tr("editor.related_topics"))
         else:
             self.related_drawer.pack_forget()
-            self.related_toggle_btn.config(text="▴ 相关话题")
+            self.related_toggle_btn.config(text="▴ " + tr("editor.related_topics"))
         self._update_related_count()
         self._render_related_topics()
-
-    def _check_form_overflow(self):
-        if not hasattr(self, 'form_container'):
-            return
-        frame_h = self.form_frame.winfo_reqheight()
-        canvas_h = self.form_canvas.winfo_height()
-        if frame_h > canvas_h:
-            self.form_canvas.itemconfig("form_window", height=frame_h)
 
     def _update_related_count(self):
         n = len(self._related_topics)
@@ -1278,23 +1395,46 @@ class EditorWindow:
 
     def _sync_related_from_content(self, knowledge_text):
         import re
-        existing_keys = {(r["subject"], r["chapter"], r["keyword"]) for r in self._related_topics}
+        knowledge_text = expand_linkmap(knowledge_text)
         all_items = self.db.list_all_keywords()
         kw_map = {}
         for subj, ch, kw in all_items:
             if kw not in kw_map:
                 kw_map[kw] = (subj, ch)
+        auto_kws = set()
         for m in re.finditer(r'\[\[([^\]|]+)(?:\|([^\]]+))?\]\]', knowledge_text):
             target_kw = m.group(1)
             if target_kw in kw_map:
+                auto_kws.add(target_kw)
+        self._related_topics = [
+            r for r in self._related_topics
+            if not (r.get("_auto") and r["keyword"] not in auto_kws)
+        ]
+        existing = {r["keyword"] for r in self._related_topics}
+        for target_kw in auto_kws:
+            if target_kw not in existing:
                 subj, ch = kw_map[target_kw]
-                key = (subj, ch, target_kw)
-                if key not in existing_keys:
-                    self._related_topics.append({
-                        "subject": subj, "chapter": ch,
-                        "keyword": target_kw, "display": target_kw
-                    })
-                    existing_keys.add(key)
+                self._related_topics.append({
+                    "subject": subj, "chapter": ch,
+                    "keyword": target_kw, "display": target_kw,
+                    "_auto": True,
+                })
+
+    def _on_knowledge_change(self, event):
+        self._dirty = True
+        self._schedule_related_sync()
+
+    def _schedule_related_sync(self):
+        if self._related_sync_after_id is not None:
+            self.root.after_cancel(self._related_sync_after_id)
+        self._related_sync_after_id = self.root.after(600, self._do_sync_related)
+
+    def _do_sync_related(self):
+        self._related_sync_after_id = None
+        text = self._raw_knowledge if self._read_mode else self.knowledge_text.get("1.0", tk.END).strip()
+        self._sync_related_from_content(text)
+        self._render_related_topics()
+        self._update_related_count()
 
     def _render_knowledge(self, text, ktype):
         text = expand_linkmap(text)
@@ -1316,9 +1456,17 @@ class EditorWindow:
             self.knowledge_text.tag_config(f"r_h{lvl}",
                 font=("Microsoft YaHei", size, "bold"), foreground="#2c3e50",
                 spacing1=6, spacing3=2)
+        self.knowledge_text.tag_config("r_italic", font=("Microsoft YaHei", 10, "italic"),
+                                        foreground=default_fg)
+        self.knowledge_text.tag_config("r_underline", font=("Microsoft YaHei", 10),
+                                        foreground=default_fg, underline=1)
+        self.knowledge_text.tag_config("r_underline_dashed", font=("Microsoft YaHei", 10, "italic"),
+                                        foreground=default_fg, underline=1)
+        self.knowledge_text.tag_config("r_strikethrough", font=("Microsoft YaHei", 10),
+                                        foreground=default_fg, overstrike=1)
         self._link_tag_counter = getattr(self, "_link_tag_counter", 0) + 1
         link_base = self._link_tag_counter
-        pattern = r'(!\[.*?\]\([^)]+\)|\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
+        pattern = r'(!\[.*?\]\([^)]+\)|\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|~~.*?~~|__.*?__|~.*?~|//.*?//|`.*?`)'
         link_idx = 0
         lines = text.split("\n")
         i = 0
@@ -1408,6 +1556,18 @@ class EditorWindow:
                     self.knowledge_text.insert(tk.END, part[2:-2], tags)
                 elif part.startswith("??") and part.endswith("??"):
                     tags = ("r_bullet", "r_tip") if bullet else ("r_tip",)
+                    self.knowledge_text.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("~~") and part.endswith("~~"):
+                    tags = ("r_bullet", "r_strikethrough") if bullet else ("r_strikethrough",)
+                    self.knowledge_text.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("__") and part.endswith("__"):
+                    tags = ("r_bullet", "r_underline") if bullet else ("r_underline",)
+                    self.knowledge_text.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("~") and part.endswith("~"):
+                    tags = ("r_bullet", "r_underline_dashed") if bullet else ("r_underline_dashed",)
+                    self.knowledge_text.insert(tk.END, part[1:-1], tags)
+                elif part.startswith("//") and part.endswith("//"):
+                    tags = ("r_bullet", "r_italic") if bullet else ("r_italic",)
                     self.knowledge_text.insert(tk.END, part[2:-2], tags)
                 elif part.startswith("`") and part.endswith("`"):
                     tags = ("r_bullet", "r_code") if bullet else ("r_code",)
@@ -1647,6 +1807,9 @@ class EditorWindow:
         if self._search_after_id is not None:
             self.root.after_cancel(self._search_after_id)
             self._search_after_id = None
+        if self._related_sync_after_id is not None:
+            self.root.after_cancel(self._related_sync_after_id)
+            self._related_sync_after_id = None
         if self._editing_type == "subject":
             desc = self.desc_text.get("1.0", tk.END).strip()
             self.db.save_subject_description(self.current_subject, desc)
@@ -1717,7 +1880,7 @@ class EditorWindow:
             }
             self._preview_popup = PopupWindow(
                 self.root, item, on_review=lambda *a: None,
-                on_close=self._clear_preview, on_link=None, preview=True
+                on_close=self._clear_preview, on_link=self.navigate_to_keyword, preview=True
             )
         except Exception as e:
             import traceback
@@ -1781,6 +1944,14 @@ class EditorWindow:
         text.insert(tk.END, "- " + tr("markup.item") + "\n* " + tr("markup.item") + "\n\n", "code")
         text.insert(tk.END, "🔁 " + tr("markup.linkmap") + "\n", "h")
         text.insert(tk.END, "[linkmap]\n" + tr("markup.linkmap_src") + " -> " + tr("markup.linkmap_target") + "\n[/linkmap]", "code")
+        text.insert(tk.END, "\n\n🎴 " + tr("markup.italic") + "\n", "h")
+        text.insert(tk.END, "//" + tr("markup.italic") + "//\n\n", "code")
+        text.insert(tk.END, "📝 " + tr("markup.underline") + "\n", "h")
+        text.insert(tk.END, "__" + tr("markup.underline") + "__\n\n", "code")
+        text.insert(tk.END, "┅ " + tr("markup.underline_dashed") + "\n", "h")
+        text.insert(tk.END, "~" + tr("markup.underline_dashed") + "~\n\n", "code")
+        text.insert(tk.END, "⨁ " + tr("markup.strikethrough") + "\n", "h")
+        text.insert(tk.END, "~~" + tr("markup.strikethrough") + "~~\n\n", "code")
 
         text.config(state=tk.DISABLED)
 
@@ -1921,13 +2092,13 @@ class EditorWindow:
 
     def _add_subject_dialog(self):
         dialog = tk.Toplevel(self.root)
-        dialog.title("添加学科")
+        dialog.title(tr("editor.dialog_add_subject"))
         dialog.resizable(False, False)
         dialog.transient(self.root)
         dialog.grab_set()
         self._center_dialog(dialog)
 
-        tk.Label(dialog, text="学科名称:", font=("Microsoft YaHei", 10)).pack(pady=(12, 4))
+        tk.Label(dialog, text=tr("editor.dialog_subject_name"), font=("Microsoft YaHei", 10)).pack(pady=(12, 4))
         entry = tk.Entry(dialog, font=("Microsoft YaHei", 11))
         entry.pack(padx=20, fill=tk.X, ipady=2)
         entry.focus_set()
@@ -1941,18 +2112,18 @@ class EditorWindow:
                 self._select_tree_item(("subject", name))
                 dialog.destroy()
             else:
-                messagebox.showwarning("提示", "名称不能为空")
+                messagebox.showwarning(tr("app.warning"), tr("editor.dialog_name_required"))
 
-        tk.Button(dialog, text="确定", font=("Microsoft YaHei", 10),
+        tk.Button(dialog, text=tr("app.confirm"), font=("Microsoft YaHei", 10),
                   command=confirm).pack(pady=(8, 0))
         dialog.bind("<Return>", lambda e: confirm())
 
     def _add_chapter_dialog(self):
         if not self.current_subject:
-            messagebox.showwarning("提示", "请先选择一个学科")
+            messagebox.showwarning(tr("app.warning"), tr("editor.dialog_select_subject"))
             return
         dialog = tk.Toplevel(self.root)
-        dialog.title("添加章节")
+        dialog.title(tr("editor.dialog_add_chapter"))
         dialog.resizable(False, False)
         dialog.transient(self.root)
         dialog.grab_set()
@@ -1960,7 +2131,7 @@ class EditorWindow:
 
         tk.Label(dialog, text=tr("editor.subject") + f": {self.current_subject}", font=("Microsoft YaHei", 9),
                  fg="gray").pack(pady=(8, 0))
-        tk.Label(dialog, text="章节名称:", font=("Microsoft YaHei", 10)).pack(pady=(4, 0))
+        tk.Label(dialog, text=tr("editor.dialog_chapter_name"), font=("Microsoft YaHei", 10)).pack(pady=(4, 0))
         entry = tk.Entry(dialog, font=("Microsoft YaHei", 11))
         entry.pack(padx=20, fill=tk.X, ipady=2)
         entry.focus_set()
@@ -1974,18 +2145,18 @@ class EditorWindow:
                 self._select_tree_item(("chapter", name))
                 dialog.destroy()
             else:
-                messagebox.showwarning("提示", "名称不能为空")
+                messagebox.showwarning(tr("app.warning"), tr("editor.dialog_name_required"))
 
-        tk.Button(dialog, text="确定", font=("Microsoft YaHei", 10),
+        tk.Button(dialog, text=tr("app.confirm"), font=("Microsoft YaHei", 10),
                   command=confirm).pack(pady=(8, 0))
         dialog.bind("<Return>", lambda e: confirm())
 
     def _add_keyword_dialog(self):
         if not self.current_subject or not self.current_chapter:
-            messagebox.showwarning("提示", "请先选择一个章节")
+            messagebox.showwarning(tr("app.warning"), tr("editor.dialog_select_chapter"))
             return
         dialog = tk.Toplevel(self.root)
-        dialog.title("添加关键词")
+        dialog.title(tr("editor.dialog_add_keyword"))
         dialog.resizable(False, False)
         dialog.transient(self.root)
         dialog.grab_set()
@@ -1999,11 +2170,11 @@ class EditorWindow:
         kw_entry.pack(padx=20, fill=tk.X, ipady=2)
         kw_entry.focus_set()
 
-        tk.Label(dialog, text="知识内容:", font=("Microsoft YaHei", 10)).pack(pady=(4, 0))
+        tk.Label(dialog, text=tr("editor.knowledge_label") + ":", font=("Microsoft YaHei", 10)).pack(pady=(4, 0))
         txt = tk.Text(dialog, font=("Microsoft YaHei", 10), height=3, wrap=tk.WORD)
         txt.pack(padx=20, fill=tk.X, pady=(2, 4))
 
-        tk.Label(dialog, text="格式类型（影响弹出卡片的配色）:", font=("Microsoft YaHei", 9),
+        tk.Label(dialog, text=tr("editor.dialog_type_hint"), font=("Microsoft YaHei", 9),
                  fg="#666").pack(pady=(4, 0))
         type_var = tk.StringVar(value="normal")
         selector = self._build_type_selector(dialog, type_var)
@@ -2023,9 +2194,9 @@ class EditorWindow:
                 self._load_keyword()
                 dialog.destroy()
             else:
-                messagebox.showwarning("提示", "关键词和内容不能为空")
+                messagebox.showwarning(tr("app.warning"), tr("editor.warn_input"))
 
-        tk.Button(dialog, text="确定", font=("Microsoft YaHei", 10), bg="#3498db",
+        tk.Button(dialog, text=tr("app.confirm"), font=("Microsoft YaHei", 10), bg="#3498db",
                   fg="white", relief=tk.FLAT, padx=20, pady=4,
                   command=confirm).pack(pady=(6, 0))
         dialog.bind("<Return>", lambda e: confirm())

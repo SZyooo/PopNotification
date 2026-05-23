@@ -141,6 +141,19 @@ class KnowledgeBase:
         if os.path.exists(filepath):
             os.remove(filepath)
 
+    def move_keyword(self, subject, chapter, keyword, to_subject, to_chapter):
+        source_path = self.get_keyword_path(subject, chapter, keyword)
+        if not os.path.exists(source_path):
+            return False
+        target_dir = os.path.join(self.root_path, sanitize_filename(to_subject), sanitize_filename(to_chapter))
+        os.makedirs(target_dir, exist_ok=True)
+        target_path = os.path.join(target_dir, sanitize_filename(keyword) + ".json")
+        if os.path.exists(target_path):
+            return False
+        import shutil
+        shutil.move(source_path, target_path)
+        return True
+
     # ---- Subject/Chapter Description ----
     def get_subject_description(self, subject):
         path = os.path.join(self.root_path, sanitize_filename(subject), ".description.json")

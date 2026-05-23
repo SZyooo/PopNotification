@@ -211,6 +211,14 @@ class PopupWindow:
             self.text_widget.tag_config(f"h{lvl}",
                 font=("Microsoft YaHei", size, "bold"), foreground="#2c3e50",
                 spacing1=6, spacing3=2)
+        self.text_widget.tag_config("italic", font=("Microsoft YaHei", 10, "italic"),
+                                     foreground=default_fg)
+        self.text_widget.tag_config("underline", font=("Microsoft YaHei", 10),
+                                     foreground=default_fg, underline=1)
+        self.text_widget.tag_config("underline_dashed", font=("Microsoft YaHei", 10, "italic"),
+                                     foreground=default_fg, underline=1)
+        self.text_widget.tag_config("strikethrough", font=("Microsoft YaHei", 10),
+                                     foreground=default_fg, overstrike=1)
 
         self._insert_markup_text(text)
 
@@ -271,6 +279,8 @@ class PopupWindow:
     def _insert_markup_text(self, text):
         from editor import expand_linkmap
         text = expand_linkmap(text)
+        self._link_tag_counter = getattr(self, "_link_tag_counter", 0) + 1
+        link_idx = 0
         lines = text.split("\n")
         i = 0
         while i < len(lines):
@@ -315,7 +325,7 @@ class PopupWindow:
                 elif rest.startswith("# "):
                     heading_tag = "h1"
                     rest = rest[2:]
-            pattern = r'(!\[.*?\]\([^)]+\)|\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
+            pattern = r'(!\[.*?\]\([^)]+\)|\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|~~.*?~~|__.*?__|~.*?~|//.*?//|`.*?`)'
             parts = re.split(pattern, rest)
             for part in parts:
                 if part.startswith("![") and part.endswith(")"):
@@ -333,8 +343,14 @@ class PopupWindow:
                         self.text_widget.insert(tk.END, f"📌 {pin_display}", tags)
                     elif "|" in inner:
                         keyword, display = inner.split("|", 1)
-                        if keyword and self.on_link:
-                            tag = f"_link_{id(part)}_{id(line)}"
+                        if not keyword:
+                            keyword = display or inner
+                            display = keyword
+                        if not display:
+                            display = keyword or inner
+                        link_idx += 1
+                        tag = f"_link_{self._link_tag_counter}_{link_idx}"
+                        if self.on_link:
                             self.text_widget.tag_config(tag, foreground="#2980b9", underline=1,
                                                         font=("Microsoft YaHei", 10))
                             bt = ("bullet", tag) if bullet else (tag,)
@@ -345,14 +361,15 @@ class PopupWindow:
                                 lambda e: self.text_widget.config(cursor="hand2"))
                             self.text_widget.tag_bind(tag, "<Leave>",
                                 lambda e: self.text_widget.config(cursor="hand2"))
-                        elif keyword:
+                        else:
                             tags = ("bullet",) if bullet else ()
                             self.text_widget.insert(tk.END, display, tags + ("normal",))
                     else:
                         keyword = inner
                         display = inner
-                        if keyword and self.on_link:
-                            tag = f"_link_{id(part)}_{id(line)}"
+                        link_idx += 1
+                        tag = f"_link_{self._link_tag_counter}_{link_idx}"
+                        if self.on_link:
                             self.text_widget.tag_config(tag, foreground="#2980b9", underline=1,
                                                         font=("Microsoft YaHei", 10))
                             bt = ("bullet", tag) if bullet else (tag,)
@@ -363,7 +380,7 @@ class PopupWindow:
                                 lambda e: self.text_widget.config(cursor="hand2"))
                             self.text_widget.tag_bind(tag, "<Leave>",
                                 lambda e: self.text_widget.config(cursor="hand2"))
-                        elif keyword:
+                        else:
                             tags = ("bullet",) if bullet else ()
                             self.text_widget.insert(tk.END, display, tags + ("normal",))
                 elif part.startswith("**") and part.endswith("**"):
@@ -374,6 +391,18 @@ class PopupWindow:
                     self.text_widget.insert(tk.END, part[2:-2], tags)
                 elif part.startswith("??") and part.endswith("??"):
                     tags = ("bullet", "tip") if bullet else ("tip",)
+                    self.text_widget.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("~~") and part.endswith("~~"):
+                    tags = ("bullet", "strikethrough") if bullet else ("strikethrough",)
+                    self.text_widget.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("__") and part.endswith("__"):
+                    tags = ("bullet", "underline") if bullet else ("underline",)
+                    self.text_widget.insert(tk.END, part[2:-2], tags)
+                elif part.startswith("~") and part.endswith("~"):
+                    tags = ("bullet", "underline_dashed") if bullet else ("underline_dashed",)
+                    self.text_widget.insert(tk.END, part[1:-1], tags)
+                elif part.startswith("//") and part.endswith("//"):
+                    tags = ("bullet", "italic") if bullet else ("italic",)
                     self.text_widget.insert(tk.END, part[2:-2], tags)
                 elif part.startswith("`") and part.endswith("`"):
                     tags = ("bullet", "code") if bullet else ("code",)
