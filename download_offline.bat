@@ -1,12 +1,12 @@
 @echo off
-title PopNotification - Download Offline Packages
+title BubbleMind - Download Offline Packages
 cd /d "%~dp0"
 
 set OFFLINE_DIR=offline_packages
 if not exist "%OFFLINE_DIR%" mkdir "%OFFLINE_DIR%"
 
 echo ============================================
-echo   PopNotification - Offline Package Download
+echo   BubbleMind - Offline Package Download
 echo ============================================
 echo.
 echo This will download all files needed for offline install.

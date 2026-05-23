@@ -1,4 +1,4 @@
-# PopNotification — 知识卡片弹窗提醒
+# BubbleMind — 知识卡片弹窗提醒
 
 定时弹出知识卡片，帮助巩固记忆。支持遗忘曲线复习策略。
 
@@ -14,7 +14,7 @@ install.bat
 add_to_startup.bat
 
 # 3. 启动程序
-启动.bat
+BubbleMind.exe
 ```
 
 > 启动后右下角会出现蓝色图标，右键可打开编辑器、立即检查、切换复习科目。
@@ -23,7 +23,7 @@ add_to_startup.bat
 
 ## 首次使用
 
-1. 运行 `启动.bat`，弹出对话框询问**知识数据库根路径**，选择一个文件夹用于存放知识卡片（也可用默认路径）
+1. 运行 `BubbleMind.exe`，弹出对话框询问**知识数据库根路径**，选择一个文件夹用于存放知识卡片（也可用默认路径）
 2. 询问是否启动后台提醒：
    - **是** — 后台运行，定时弹出知识卡片
    - **否** — 仅打开编辑器，管理知识内容
@@ -98,7 +98,7 @@ git push
 
 运行 `add_to_startup.bat`，添加到 Windows 启动项。
 
-或手动添加：将 `启动.vbs` 的快捷方式放入 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`
+或手动将 `BubbleMind.exe` 的快捷方式放入 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`
 
 ---
 
@@ -106,8 +106,7 @@ git push
 
 | 文件 | 说明 |
 |------|------|
-| `启动.bat` | 启动程序（有控制台窗口） |
-| `启动.vbs` | 静默启动（无窗口，推荐开机用） |
+| `BubbleMind.exe` | 启动程序（推荐，无控制台窗口） |
 | `main.py` | 入口：选择后台模式或仅编辑器 |
 | `notifier.py` | 后台通知 + 系统托盘 |
 | `editor.py` | 知识卡片编辑器 |

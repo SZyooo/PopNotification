@@ -3,6 +3,7 @@ import re
 import math
 import os
 
+from i18n import tr
 from memory import update_memory
 
 try:
@@ -29,7 +30,7 @@ TYPE_ACCENT = {
     "warning": "#e67e22",
 }
 
-TYPE_TAG = {"normal": "常规", "tip": "提示", "warning": "警告"}
+TYPE_TAG = {"normal": "popup.type_normal", "tip": "popup.type_tip", "warning": "popup.type_warning"}
 
 
 class PopupWindow:
@@ -64,7 +65,7 @@ class PopupWindow:
         y = -self.height
 
         self.top = tk.Toplevel(parent)
-        self.top.title(f"知识卡片 - {kw}")
+        self.top.title(f"{tr('popup.knowledge_card')} - {kw}")
         self.top.geometry(f"{self.width}x{self.height}+{x}+{y}")
         self.top.overrideredirect(True)
         self.top.attributes("-topmost", True)
@@ -84,7 +85,7 @@ class PopupWindow:
             font=("Microsoft YaHei", 9), anchor=tk.W
         ).pack(side=tk.LEFT, padx=10, pady=4)
 
-        type_tag = TYPE_TAG.get(ktype, "常规")
+        type_tag = tr(TYPE_TAG.get(ktype, "popup.type_normal"))
         tk.Label(
             header_frame, text=type_tag,
             bg="white", fg=accent,
@@ -120,6 +121,7 @@ class PopupWindow:
         )
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.text_hscroll.config(command=self.text_widget.xview)
+        self._bind_drag()
 
         self.code_frames = []
 
@@ -127,7 +129,7 @@ class PopupWindow:
         self.related_frame = tk.Frame(body_frame, bg=bg)
         if related:
             self.related_frame.pack(fill=tk.X, padx=10, pady=(0, 4))
-            tk.Label(self.related_frame, text="相关话题:", font=("Microsoft YaHei", 9, "bold"),
+            tk.Label(self.related_frame, text=tr("popup.related") + ":", font=("Microsoft YaHei", 9, "bold"),
                      fg=accent, bg=bg).pack(anchor=tk.W, pady=(0, 2))
             for rel in related:
                 r_kw = rel.get("keyword", "")
@@ -143,7 +145,7 @@ class PopupWindow:
                     if self.on_link:
                         link.bind("<Button-1>", lambda e, k=r_kw: self.on_link(k))
                     link.bind("<Enter>", lambda e: self.text_widget.config(cursor="hand2"))
-                    link.bind("<Leave>", lambda e: self.text_widget.config(cursor=""))
+                    link.bind("<Leave>", lambda e: self.text_widget.config(cursor="hand2"))
 
         self.more_indicator = tk.Label(
             body_frame, text="…", bg=bg, fg="#999",
@@ -154,12 +156,12 @@ class PopupWindow:
         # Schedule indicator check after slide-in animation completes (150ms)
         self.top.after(200, self._update_more_indicator)
 
-        detail_btn = tk.Button(
-            btn_frame, text="详细 ▼", font=("Microsoft YaHei", 9),
+        self.detail_btn = tk.Button(
+            btn_frame, text=tr("popup.detail") + " ▼", font=("Microsoft YaHei", 9),
             bg=btn_bg, relief=tk.GROOVE, padx=10, cursor="hand2",
             command=self.toggle_expand
         )
-        detail_btn.place(x=8, rely=0.5, anchor=tk.W, height=32)
+        self.detail_btn.place(x=8, rely=0.5, anchor=tk.W, height=32)
 
         close_btn = tk.Button(
             btn_frame, text="×", font=("Arial", 14, "bold"),
@@ -169,7 +171,7 @@ class PopupWindow:
         close_btn.place(relx=1.0, rely=0.5, anchor=tk.E, x=-8, height=28)
 
         edit_btn = tk.Button(
-            btn_frame, text="编辑", font=("Microsoft YaHei", 9),
+            btn_frame, text=tr("popup.edit"), font=("Microsoft YaHei", 9),
             bg=btn_bg, relief=tk.GROOVE, padx=8, cursor="hand2",
             command=self._edit
         )
@@ -177,11 +179,11 @@ class PopupWindow:
             edit_btn.place(relx=1.0, rely=0.5, anchor=tk.E, x=-55, height=28)
 
         if not self.preview:
-            for i, label in enumerate(("陌生", "熟悉", "熟记")):
+            for i, (tr_key, action_key) in enumerate([("popup.strange", "strange"), ("popup.familiar", "familiar"), ("popup.master", "master")]):
                 btn = tk.Button(
-                    btn_frame, text=label, font=("Microsoft YaHei", 9),
+                    btn_frame, text=tr(tr_key), font=("Microsoft YaHei", 9),
                     bg=btn_bg, relief=tk.GROOVE, cursor="hand2",
-                    command=lambda a=label: self._review(a)
+                    command=lambda a=action_key: self._review(a)
                 )
                 btn.place(relx=0.3 + i * 0.15, rely=0.5, anchor=tk.CENTER, width=70, height=32)
 
@@ -201,15 +203,74 @@ class PopupWindow:
         self.text_widget.tag_config("tip", foreground="#27ae60", font=("Microsoft YaHei", 10))
         self.text_widget.tag_config("warning", foreground="#e74c3c", font=("Microsoft YaHei", 10, "bold"))
         self.text_widget.tag_config("bullet", foreground=default_fg, lmargin1=10, lmargin2=24)
+        self.text_widget.tag_config("pin", foreground="#8e44ad", font=("Microsoft YaHei", 10, "bold"))
         self.text_widget.tag_config("code", foreground="#e67e22", font=("Consolas", 11, "bold"),
                                      background="#2d2d2d", relief=tk.GROOVE, borderwidth=1,
                                      overstrike=False, underline=False, spacing1=2, spacing3=2)
+        for lvl, size in [(1, 16), (2, 14), (3, 12)]:
+            self.text_widget.tag_config(f"h{lvl}",
+                font=("Microsoft YaHei", size, "bold"), foreground="#2c3e50",
+                spacing1=6, spacing3=2)
 
         self._insert_markup_text(text)
 
         self.text_widget.config(state=tk.DISABLED)
 
+    def _bind_drag(self):
+        self._space_held = False
+        self._drag_active = False
+        self._drag_start_x = 0
+        self._drag_start_y = 0
+
+        def on_space_press(event):
+            self._space_held = True
+            self.text_widget.config(cursor="hand2")
+
+        def on_space_release(event):
+            self._space_held = False
+            self.text_widget.config(cursor="")
+
+        def on_press(event):
+            if self._space_held:
+                self._drag_start_x = event.x_root
+                self._drag_start_y = event.y_root
+                self._drag_active = True
+                self.text_widget.config(cursor="fleur")
+                return "break"
+
+        def on_drag(event):
+            if self._space_held:
+                if self._drag_active:
+                    dx = self._drag_start_x - event.x_root
+                    dy = self._drag_start_y - event.y_root
+                    if abs(dx) > 3:
+                        units = max(1, abs(dx) // 8)
+                        self.text_widget.xview_scroll(units if dx > 0 else -units, "units")
+                    if abs(dy) > 3:
+                        units = max(1, abs(dy) // 8)
+                        self.text_widget.yview_scroll(units if dy > 0 else -units, "units")
+                    if abs(dx) > 3 or abs(dy) > 3:
+                        self._drag_start_x = event.x_root
+                        self._drag_start_y = event.y_root
+                return "break"
+
+        def on_release(event):
+            if self._drag_active:
+                self._drag_active = False
+                self.text_widget.config(cursor="hand2" if self._space_held else "")
+                return "break"
+
+        self.text_widget.bind("<KeyPress-space>", on_space_press)
+        self.text_widget.bind("<KeyRelease-space>", on_space_release)
+        self.text_widget.bind("<Button-1>", on_press)
+        self.text_widget.bind("<B1-Motion>", on_drag)
+        self.text_widget.bind("<ButtonRelease-1>", on_release)
+        self.text_widget.bind("<Button-2>", lambda e: "break")
+        self.text_widget.bind("<B2-Motion>", lambda e: "break")
+
     def _insert_markup_text(self, text):
+        from editor import expand_linkmap
+        text = expand_linkmap(text)
         lines = text.split("\n")
         i = 0
         while i < len(lines):
@@ -229,11 +290,31 @@ class PopupWindow:
                 continue
             # Normal line processing
             bullet = False
+            heading_tag = ""
             rest = line
-            if line.startswith("- ") or line.startswith("* "):
+            if rest.startswith("- ") or rest.startswith("* "):
                 bullet = True
-                rest = line[2:]
-                self.text_widget.insert(tk.END, "  • ", "bullet")
+                rest = rest[2:]
+                if rest.startswith("### "):
+                    heading_tag = "h3"
+                    rest = rest[4:]
+                elif rest.startswith("## "):
+                    heading_tag = "h2"
+                    rest = rest[3:]
+                elif rest.startswith("# "):
+                    heading_tag = "h1"
+                    rest = rest[2:]
+                self.text_widget.insert(tk.END, "  • ", heading_tag or "bullet")
+            else:
+                if rest.startswith("### "):
+                    heading_tag = "h3"
+                    rest = rest[4:]
+                elif rest.startswith("## "):
+                    heading_tag = "h2"
+                    rest = rest[3:]
+                elif rest.startswith("# "):
+                    heading_tag = "h1"
+                    rest = rest[2:]
             pattern = r'(!\[.*?\]\([^)]+\)|\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
             parts = re.split(pattern, rest)
             for part in parts:
@@ -243,28 +324,48 @@ class PopupWindow:
                         alt_text = match.group(1)
                         img_path = match.group(2)
                         self._insert_image(img_path, alt_text)
-                elif part.startswith("[[") and part.endswith("]]"):
+                if part.startswith("[[") and part.endswith("]]"):
                     inner = part[2:-2]
-                    if "|" in inner:
+                    if inner.startswith("pin:"):
+                        pin_word = inner[4:]
+                        pin_display = pin_word.split("|", 1)[0] if "|" in pin_word else pin_word
+                        tags = ("bullet", "pin") if bullet else ("pin",)
+                        self.text_widget.insert(tk.END, f"📌 {pin_display}", tags)
+                    elif "|" in inner:
                         keyword, display = inner.split("|", 1)
+                        if keyword and self.on_link:
+                            tag = f"_link_{id(part)}_{id(line)}"
+                            self.text_widget.tag_config(tag, foreground="#2980b9", underline=1,
+                                                        font=("Microsoft YaHei", 10))
+                            bt = ("bullet", tag) if bullet else (tag,)
+                            self.text_widget.insert(tk.END, display, bt)
+                            self.text_widget.tag_bind(tag, "<Button-1>",
+                                lambda e, k=keyword: self.on_link(k))
+                            self.text_widget.tag_bind(tag, "<Enter>",
+                                lambda e: self.text_widget.config(cursor="hand2"))
+                            self.text_widget.tag_bind(tag, "<Leave>",
+                                lambda e: self.text_widget.config(cursor="hand2"))
+                        elif keyword:
+                            tags = ("bullet",) if bullet else ()
+                            self.text_widget.insert(tk.END, display, tags + ("normal",))
                     else:
                         keyword = inner
                         display = inner
-                    if keyword and self.on_link:
-                        tag = f"_link_{id(part)}_{id(line)}"
-                        self.text_widget.tag_config(tag, foreground="#2980b9", underline=1,
-                                                    font=("Microsoft YaHei", 10))
-                        bt = ("bullet", tag) if bullet else (tag,)
-                        self.text_widget.insert(tk.END, display, bt)
-                        self.text_widget.tag_bind(tag, "<Button-1>",
-                            lambda e, kw=keyword: self.on_link(kw))
-                        self.text_widget.tag_bind(tag, "<Enter>",
-                            lambda e: self.text_widget.config(cursor="hand2"))
-                        self.text_widget.tag_bind(tag, "<Leave>",
-                            lambda e: self.text_widget.config(cursor=""))
-                    elif keyword:
-                        tags = ("bullet",) if bullet else ()
-                        self.text_widget.insert(tk.END, display, tags + ("normal",))
+                        if keyword and self.on_link:
+                            tag = f"_link_{id(part)}_{id(line)}"
+                            self.text_widget.tag_config(tag, foreground="#2980b9", underline=1,
+                                                        font=("Microsoft YaHei", 10))
+                            bt = ("bullet", tag) if bullet else (tag,)
+                            self.text_widget.insert(tk.END, display, bt)
+                            self.text_widget.tag_bind(tag, "<Button-1>",
+                                lambda e, k=keyword: self.on_link(k))
+                            self.text_widget.tag_bind(tag, "<Enter>",
+                                lambda e: self.text_widget.config(cursor="hand2"))
+                            self.text_widget.tag_bind(tag, "<Leave>",
+                                lambda e: self.text_widget.config(cursor="hand2"))
+                        elif keyword:
+                            tags = ("bullet",) if bullet else ()
+                            self.text_widget.insert(tk.END, display, tags + ("normal",))
                 elif part.startswith("**") and part.endswith("**"):
                     tags = ("bullet", "highlight") if bullet else ("highlight",)
                     self.text_widget.insert(tk.END, part[2:-2], tags)
@@ -278,7 +379,7 @@ class PopupWindow:
                     tags = ("bullet", "code") if bullet else ("code",)
                     self.text_widget.insert(tk.END, part[1:-1].replace(" ", "\u00a0"), tags)
                 elif part:
-                    tag = "bullet" if bullet else "normal"
+                    tag = heading_tag or ("bullet" if bullet else "normal")
                     self.text_widget.insert(tk.END, part, tag)
             self.text_widget.insert(tk.END, "\n")
             i += 1
@@ -702,6 +803,9 @@ class PopupWindow:
         h = self.expanded_h if self.expanded else self.height
         if self.expanded:
             self.more_indicator.pack_forget()
+            self.detail_btn.config(text=tr("popup.collapse") + " ▲")
+        else:
+            self.detail_btn.config(text=tr("popup.detail") + " ▼")
         self.text_widget.config(state=tk.NORMAL)
         self.text_widget.delete("1.0", tk.END)
         self._insert_markup_text(self.knowledge)

@@ -5,3 +5,5 @@ app_config.json
 offline_packages/
 stderr.txt
 stdout.txt
+*.exe
+launcher_res.o

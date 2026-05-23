@@ -8,5 +8,5 @@ echo [ERROR] Python not found. Run install.bat first.
 pause
 exit /b 1
 :ok
-echo PopNotification will auto-start on next boot.
+echo BubbleMind will auto-start on next boot.
 pause

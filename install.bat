@@ -1,5 +1,5 @@
 @echo off
-title PopNotification Setup
+title BubbleMind Setup
 cd /d "%~dp0"
 
 set OFFLINE_DIR=offline_packages
@@ -7,7 +7,7 @@ set HAS_OFFLINE=0
 if exist "%OFFLINE_DIR%\*.whl" set HAS_OFFLINE=1
 
 echo ============================================
-echo   PopNotification - Environment Setup
+echo   BubbleMind - Environment Setup
 echo ============================================
 echo.
 
@@ -116,8 +116,7 @@ echo.
 echo ============================================
 echo   Setup Complete!
 echo.
-echo   Run: launch.bat  (with console window)
-echo   Or:  launch.vbs  (silent, no window)
+echo   Run: BubbleMind.exe
 echo.
 echo   For auto-start: run add_to_startup.bat
 echo ============================================

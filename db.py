@@ -225,6 +225,23 @@ class KnowledgeBase:
                 total += self.cleanup_orphan_images(subject, chapter)
         return total
 
+    def collect_pins(self, subject, chapter=None):
+        """Collect all [[pin:word]] references from knowledge content.
+        Returns dict: pin_word -> [(chapter, keyword), ...]"""
+        import re
+        pins = {}
+        chapters = [chapter] if chapter else self.list_chapters(subject)
+        for ch in chapters:
+            for kw in self.list_keywords(subject, ch):
+                data = self.get_keyword_data(subject, ch, kw)
+                if data and data.get("knowledge"):
+                    for m in re.finditer(r'\[\[pin:([^\]]+?)(?:\|[^\]]*)?\]\]', data["knowledge"]):
+                        word = m.group(1).strip()
+                        if word not in pins:
+                            pins[word] = []
+                        pins[word].append((ch, kw))
+        return pins
+
     def get_stats(self):
         total = 0
         by_level = {i: 0 for i in range(6)}

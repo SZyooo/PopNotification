@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>PopNotification — 知识卡片弹窗提醒</title>
+<title>BubbleMind — 知识卡片弹窗提醒</title>
 <style>
 body { font-family: "Microsoft YaHei", sans-serif; max-width: 800px; margin: 30px auto; padding: 0 20px; color: #333; line-height: 1.7; }
 h1 { border-bottom: 2px solid #3498db; padding-bottom: 8px; color: #2c3e50; }
@@ -21,7 +21,7 @@ li { margin: 4px 0; }
 </head>
 <body>
 
-<h1>📖 PopNotification — 知识卡片弹窗提醒</h1>
+<h1>📖 BubbleMind — 知识卡片弹窗提醒</h1>
 <p>定时弹出知识卡片，帮助巩固记忆。支持遗忘曲线复习策略。</p>
 
 <hr>
@@ -34,13 +34,13 @@ rem 2. 添加开机自启（可选）
 add_to_startup.bat
 
 rem 3. 启动程序
-启动.bat</code></pre>
+BubbleMind.exe
 
 <div class="note">启动后右下角会出现蓝色图标，右键可打开编辑器、立即检查、切换复习科目。</div>
 
 <h2>首次使用</h2>
 <ol>
-  <li>运行 <code>启动.bat</code>，弹出对话框询问<strong>知识数据库根路径</strong>，选择一个文件夹用于存放知识卡片（也可用默认路径）</li>
+  <li>运行 <code>BubbleMind.exe</code>，弹出对话框询问<strong>知识数据库根路径</strong>，选择一个文件夹用于存放知识卡片（也可用默认路径）</li>
   <li>询问是否启动后台提醒：
     <ul>
       <li><strong>是</strong> — 后台运行，定时弹出知识卡片</li>
@@ -103,13 +103,12 @@ git push</code></pre>
 
 <h2>开机自启</h2>
 <p>运行 <code>add_to_startup.bat</code>，添加到 Windows 启动项。</p>
-<p>或手动添加：将 <code>启动.vbs</code> 的快捷方式放入 <code>%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\</code></p>
+<p>或手动将 <code>BubbleMind.exe</code> 的快捷方式放入 <code>%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\</code></p>
 
 <h2>项目文件说明</h2>
 <table>
   <tr><th>文件</th><th>说明</th></tr>
-  <tr><td><code>启动.bat</code></td><td>启动程序（有控制台窗口）</td></tr>
-  <tr><td><code>启动.vbs</code></td><td>静默启动（无窗口，推荐开机用）</td></tr>
+  <tr><td><code>BubbleMind.exe</code></td><td>启动程序（推荐，无控制台窗口）</td></tr>
   <tr><td><code>main.py</code></td><td>入口：选择后台模式或仅编辑器</td></tr>
   <tr><td><code>notifier.py</code></td><td>后台通知 + 系统托盘</td></tr>
   <tr><td><code>editor.py</code></td><td>知识卡片编辑器</td></tr>

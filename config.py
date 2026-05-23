@@ -12,6 +12,7 @@ DEFAULT_CONFIG = {
     "max_items_per_check": 3,
     "primary_subject": "",
     "last_viewed_version": "",
+    "language": "zh",
 }
 
 

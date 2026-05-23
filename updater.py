@@ -8,7 +8,7 @@ import webbrowser
 import threading
 import ssl
 
-GITHUB_REPO = "SZyooo/PopNotification"
+GITHUB_REPO = "SZyooo/BubbleMind"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
@@ -39,7 +39,7 @@ def _parse_version(v):
 
 def _fetch_latest_release():
     ctx = ssl.create_default_context()
-    req = urllib.request.Request(API_URL, headers={"User-Agent": "PopNotification-Updater/1.0"})
+    req = urllib.request.Request(API_URL, headers={"User-Agent": "BubbleMind-Updater/1.0"})
     with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
         return json.loads(resp.read().decode("utf-8"))
 

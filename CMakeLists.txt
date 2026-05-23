@@ -8,5 +8,5 @@ project(pop-notify)
 add_custom_target(run
     COMMAND python main.py
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Launch PopNotification (Python + tkinter)"
+    COMMENT "Launch BubbleMind (Python + tkinter)"
 )

@@ -1,20 +1,21 @@
 from datetime import datetime, timedelta
 
 LEVEL_INTERVALS = [
-    (0, "陌生", timedelta(minutes=10),  "10分钟"),
-    (1, "陌生", timedelta(hours=1),     "1小时"),
-    (2, "熟悉", timedelta(hours=4),     "4小时"),
-    (3, "熟悉", timedelta(days=1),      "1天"),
-    (4, "熟记", timedelta(days=3),      "3天"),
-    (5, "熟记", timedelta(days=7),      "7天"),
+    (0, "strange", timedelta(minutes=10)),
+    (1, "strange", timedelta(hours=1)),
+    (2, "familiar", timedelta(hours=4)),
+    (3, "familiar", timedelta(days=1)),
+    (4, "master", timedelta(days=3)),
+    (5, "master", timedelta(days=7)),
 ]
 
-INTERVAL_DISPLAY = {lv: desc for lv, _, _, desc in LEVEL_INTERVALS}
+LEVEL_LABEL_KEYS = ["memory.level0", "memory.level1", "memory.level2",
+                    "memory.level3", "memory.level4", "memory.level5"]
 
 BUTTON_ACTIONS = {
-    "陌生": -1,
-    "熟悉": 1,
-    "熟记": 2,
+    "strange": -1,
+    "familiar": 1,
+    "master": 2,
 }
 
 
@@ -44,13 +45,21 @@ def update_memory(memory, action):
     }
 
 
+from i18n import tr
+
 def get_level_label(level):
     level = max(0, min(5, level))
-    return LEVEL_INTERVALS[level][1]
+    return tr(LEVEL_LABEL_KEYS[level])
 
 def get_interval_display(level):
     level = max(0, min(5, level))
-    return INTERVAL_DISPLAY.get(level, "")
+    seconds = LEVEL_INTERVALS[level][2].total_seconds()
+    if seconds < 3600:
+        return f"{int(seconds // 60)}min"
+    elif seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    else:
+        return f"{int(seconds // 86400)}d"
 
 
 def is_due(memory):

@@ -6,21 +6,86 @@ import subprocess
 
 from db import KnowledgeBase
 from config import load_config, save_config
+from i18n import tr, load_language, get_language, LANGUAGES
 from popup_window import PopupWindow
 
 
 TYPE_OPTIONS = [
-    ("普通", "normal", "#3498db", "默认格式"),
-    ("提示", "tip", "#1abc9c", "技巧·建议"),
-    ("警告", "warning", "#e74c3c", "易错·重点"),
+    ("popup.type_normal", "normal", "#3498db", "popup.type_normal_desc"),
+    ("popup.type_tip", "tip", "#1abc9c", "popup.type_tip_desc"),
+    ("popup.type_warning", "warning", "#e74c3c", "popup.type_warning_desc"),
 ]
+
+
+def expand_linkmap(text):
+    """Parse [linkmap] blocks and replace source words with [[target|word]] links.
+
+    [linkmap]
+    source -> target
+    源词 → 目标关键词|显示文字
+    [/linkmap]
+    """
+    import re
+    mapping = {}
+    def _replace(m):
+        block = m.group(1)
+        for line in block.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            sep = '->' if '->' in line else ('→' if '→' in line else None)
+            if sep is None:
+                continue
+            parts = line.split(sep, 1)
+            if len(parts) != 2:
+                continue
+            src = parts[0].strip()
+            rest = parts[1].strip()
+            if '|' in rest:
+                target, display = rest.split('|', 1)
+                mapping[src] = (target.strip(), display.strip())
+            else:
+                mapping[src] = (rest, None)
+        return ''
+    cleaned = re.sub(r'\[linkmap\](.*?)\[/linkmap\]', _replace, text, flags=re.DOTALL)
+    if not mapping:
+        return cleaned
+
+    result = []
+    lines = cleaned.split('\n')
+    keys = sorted(mapping.keys(), key=len, reverse=True)
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped.startswith('```'):
+            result.append(line)
+            i += 1
+            while i < len(lines):
+                result.append(lines[i])
+                if lines[i].strip() == '```':
+                    i += 1
+                    break
+                i += 1
+            continue
+        parts = re.split('(' + '|'.join(re.escape(k) for k in keys) + ')', line)
+        new_parts = []
+        for part in parts:
+            if part in mapping:
+                target, display = mapping[part]
+                new_parts.append(f'[[{target}|{display or part}]]')
+            else:
+                new_parts.append(part)
+        result.append(''.join(new_parts))
+        i += 1
+    return '\n'.join(result)
 
 
 class EditorWindow:
     def __init__(self, root, on_close_callback=None):
         self.root = root
         self.on_close_callback = on_close_callback
-        self.root.title("知识卡片编辑器")
+        self.root.title(tr("app.name") + " — " + tr("main.editor_title"))
         self.root.geometry("950x650")
         self.root.minsize(750, 480)
 
@@ -33,6 +98,8 @@ class EditorWindow:
         self._dirty = False
         self._editing_type = None
         self._read_mode = False
+        self._nav_stack = []
+        self._nav_ignore = False
         self._related_topics = []
         self._related_matches = []
         self._selected_result_idx = -1
@@ -46,6 +113,7 @@ class EditorWindow:
 
         self.root.bind("<Control-s>", lambda e: self._save_keyword())
         self.root.bind("<Control-S>", lambda e: self._save_keyword())
+        self.root.bind("<Alt-Left>", lambda e: self._nav_back())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self):
@@ -56,7 +124,7 @@ class EditorWindow:
         left_frame = tk.Frame(self.pw, width=280)
         self.pw.add(left_frame, width=280, minsize=160)
 
-        tk.Label(left_frame, text="主要复习科目", font=("Microsoft YaHei", 9, "bold"),
+        tk.Label(left_frame, text=tr("editor.primary_subject"), font=("Microsoft YaHei", 9, "bold"),
                  anchor=tk.W).pack(fill=tk.X, pady=(6, 0), padx=2)
         subject_frame = tk.Frame(left_frame)
         subject_frame.pack(fill=tk.X, pady=(2, 4))
@@ -67,10 +135,10 @@ class EditorWindow:
         )
         self.primary_subject_combo.pack(side=tk.LEFT, padx=(2, 0))
         self.primary_subject_combo.bind("<<ComboboxSelected>>", self._on_primary_subject_changed)
-        tk.Button(subject_frame, text="刷新", font=("Microsoft YaHei", 8),
+        tk.Button(subject_frame, text=tr("editor.refresh"), font=("Microsoft YaHei", 8),
                   command=self._refresh_primary_subjects).pack(side=tk.LEFT, padx=(4, 0))
 
-        tk.Label(left_frame, text="知识结构", font=("Microsoft YaHei", 11, "bold"),
+        tk.Label(left_frame, text=tr("editor.knowledge_structure"), font=("Microsoft YaHei", 11, "bold"),
                  anchor=tk.W).pack(fill=tk.X, pady=(4, 2))
 
         search_frame = tk.Frame(left_frame)
@@ -104,16 +172,16 @@ class EditorWindow:
         self._add_btn_frame = tk.Frame(left_frame)
         self._add_btn_frame.pack(fill=tk.X, pady=(4, 0))
 
-        self.btn_add_subject = tk.Button(self._add_btn_frame, text="+ 学科", font=("Microsoft YaHei", 9),
+        self.btn_add_subject = tk.Button(self._add_btn_frame, text=tr("editor.add_subject"), font=("Microsoft YaHei", 9),
                                           command=self._add_subject_dialog)
-        self.btn_add_chapter = tk.Button(self._add_btn_frame, text="+ 章节", font=("Microsoft YaHei", 9),
+        self.btn_add_chapter = tk.Button(self._add_btn_frame, text=tr("editor.add_chapter"), font=("Microsoft YaHei", 9),
                                           command=self._add_chapter_dialog)
-        self.btn_add_keyword = tk.Button(self._add_btn_frame, text="+ 关键词", font=("Microsoft YaHei", 9),
+        self.btn_add_keyword = tk.Button(self._add_btn_frame, text=tr("editor.add_keyword"), font=("Microsoft YaHei", 9),
                                           command=self._add_keyword_dialog)
 
-        tk.Button(self._add_btn_frame, text="重命名", font=("Microsoft YaHei", 9),
+        tk.Button(self._add_btn_frame, text=tr("editor.rename_btn"), font=("Microsoft YaHei", 9),
                   command=self._rename_selected).pack(side=tk.RIGHT, padx=1)
-        tk.Button(self._add_btn_frame, text="删除", font=("Microsoft YaHei", 9), fg="red",
+        tk.Button(self._add_btn_frame, text=tr("editor.delete_btn"), font=("Microsoft YaHei", 9), fg="red",
                   command=self._delete_selected).pack(side=tk.RIGHT, padx=1)
 
         right_frame = tk.Frame(self.pw)
@@ -124,11 +192,27 @@ class EditorWindow:
         bottom_frame = tk.Frame(self.root)
         bottom_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
         self._bottom_frame = bottom_frame
-        tk.Button(bottom_frame, text="知识库路径...", font=("Microsoft YaHei", 9),
+        tk.Button(bottom_frame, text=tr("editor.kb_path"), font=("Microsoft YaHei", 9),
                   command=self._change_root_path).pack(side=tk.LEFT)
         self.path_label = tk.Label(bottom_frame, text="", font=("Microsoft YaHei", 8),
                                    fg="gray", anchor=tk.W)
         self.path_label.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+
+        # Language selector
+        lang_frame = tk.Frame(bottom_frame)
+        lang_frame.pack(side=tk.RIGHT, padx=(4, 0))
+        tk.Label(lang_frame, text=tr("editor.language") + ":", font=("Microsoft YaHei", 8),
+                 fg="#888").pack(side=tk.LEFT)
+        self._lang_code_to_display = dict(LANGUAGES)
+        self._lang_display_to_code = {v: k for k, v in LANGUAGES.items()}
+        current_code = get_language()
+        current_display = LANGUAGES.get(current_code, "中文")
+        self.lang_var = tk.StringVar(value=current_display)
+        lang_combo = ttk.Combobox(lang_frame, textvariable=self.lang_var,
+                                   values=list(LANGUAGES.values()), state="readonly", width=10)
+        lang_combo.pack(side=tk.LEFT, padx=(2, 0))
+        lang_combo.bind("<<ComboboxSelected>>", self._on_language_change)
+
         self._git_btn = None
         self._git_hint = None
         self._git_url_label = None
@@ -167,7 +251,7 @@ class EditorWindow:
             "<MouseWheel>"))
 
         self.empty_label = tk.Label(
-            self.form_container, text="请在左侧选择一个关键词进行编辑",
+            self.form_container, text=tr("editor.empty_select"),
             font=("Microsoft YaHei", 12), fg="gray", bg="#fafafa"
         )
         self.empty_label.pack(expand=True)
@@ -175,19 +259,24 @@ class EditorWindow:
         # Keyword editing form
         self.form_frame = tk.Frame(self.form_container, bg="#fafafa")
 
-        tk.Label(self.form_frame, text="关键词", font=("Microsoft YaHei", 10, "bold"),
+        tk.Label(self.form_frame, text=tr("editor.keyword_label"), font=("Microsoft YaHei", 10, "bold"),
                  bg="#fafafa").pack(anchor=tk.W, pady=(4, 0))
         self.keyword_entry = tk.Entry(self.form_frame, font=("Microsoft YaHei", 11))
         self.keyword_entry.pack(fill=tk.X, pady=(2, 6), ipady=3)
         self.keyword_entry.bind("<KeyRelease>", lambda e: setattr(self, '_dirty', True))
 
-        tk.Label(self.form_frame, text="知识内容", font=("Microsoft YaHei", 10, "bold"),
+        tk.Label(self.form_frame, text=tr("editor.knowledge_label"), font=("Microsoft YaHei", 10, "bold"),
                  bg="#fafafa").pack(anchor=tk.W)
         
         text_toolbar = tk.Frame(self.form_frame, bg="#fafafa")
         text_toolbar.pack(fill=tk.X, pady=(0, 2))
-        
-        tk.Button(text_toolbar, text="📷 插入图片", font=("Microsoft YaHei", 9),
+
+        self.nav_back_btn = tk.Button(text_toolbar, text="◀", font=("Microsoft YaHei", 9),
+                                      bg="#eee", fg="#555", relief=tk.FLAT, padx=6, cursor="hand2",
+                                      state=tk.DISABLED, command=self._nav_back)
+        self.nav_back_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(text_toolbar, text=tr("editor.insert_image"), font=("Microsoft YaHei", 9),
                   bg="#3498db", fg="white", relief=tk.FLAT, padx=8, cursor="hand2",
                   command=self._insert_image_dialog).pack(side=tk.LEFT)
         self.image_status_label = tk.Label(text_toolbar, text="", font=("Microsoft YaHei", 9),
@@ -202,6 +291,7 @@ class EditorWindow:
                                        undo=True)
         self.knowledge_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.knowledge_text.bind("<KeyRelease>", lambda e: setattr(self, '_dirty', True))
+        self.knowledge_text.bind("<Return>", self._on_enter_in_knowledge)
 
         self.text_scrollbar_y = ttk.Scrollbar(text_frame, orient=tk.VERTICAL,
                                                command=self.knowledge_text.yview)
@@ -278,7 +368,7 @@ class EditorWindow:
         self.related_toggle_bar.pack(fill=tk.X, side=tk.BOTTOM)
         self.related_toggle_bar.pack_propagate(False)
 
-        self.related_toggle_btn = tk.Button(self.related_toggle_bar, text="▴ 相关话题",
+        self.related_toggle_btn = tk.Button(self.related_toggle_bar, text="▴ " + tr("editor.related_topics"),
                                             font=("Microsoft YaHei", 9, "bold"), fg="#555",
                                             bg="#e8f4f8", relief=tk.FLAT, cursor="hand2",
                                             command=self._toggle_related_drawer)
@@ -299,7 +389,7 @@ class EditorWindow:
         self.related_search_entry.bind("<Down>", lambda e: self._focus_next_result())
         self.related_search_entry.bind("<Up>", lambda e: self._focus_prev_result())
 
-        self.related_add_btn = tk.Button(self.related_toggle_bar, text="＋ 添加", font=("Microsoft YaHei", 9),
+        self.related_add_btn = tk.Button(self.related_toggle_bar, text=tr("editor.related_add"), font=("Microsoft YaHei", 9),
                   bg="#3498db", fg="white", relief=tk.FLAT, padx=10, pady=3,
                   cursor="hand2", command=self._on_related_add)
         self.related_add_btn.pack(side=tk.LEFT, padx=(6, 4))
@@ -314,9 +404,14 @@ class EditorWindow:
         self.desc_title.pack(fill=tk.X, pady=(8, 4))
         self.desc_text = tk.Text(self.desc_frame, font=("Microsoft YaHei", 10),
                                  wrap=tk.WORD, relief=tk.SUNKEN, borderwidth=1,
-                                 height=10, undo=True)
-        self.desc_text.pack(fill=tk.BOTH, expand=True, pady=(2, 4))
+                                 height=8, undo=True)
+        self.desc_text.pack(fill=tk.X, pady=(2, 4))
         self.desc_text.bind("<KeyRelease>", lambda e: setattr(self, '_dirty', True))
+
+        # Directory listing frame (used for chapter/subject pages)
+        self.dir_frame = tk.Frame(self.form_container, bg="#fafafa")
+        self.dir_inner = tk.Frame(self.dir_frame, bg="#fafafa")
+        self.dir_inner.pack(fill=tk.BOTH, expand=True)
 
         # Bottom bar container with fixed height
         self.bottom_bar_container = tk.Frame(parent, bg="#fff8e1", height=32)
@@ -332,28 +427,10 @@ class EditorWindow:
 
         # Keyword-only UI elements
         self.kw_legend_frame = tk.Frame(bottom_bar, bg="#fff8e1")
-        self.kw_legend_frame.pack(fill=tk.X, pady=(2, 1))
-        tk.Label(self.kw_legend_frame, text="行内标记语法:", font=("Microsoft YaHei", 8, "bold"),
-                 fg="#888", bg="#fff8e1").pack(side=tk.LEFT)
-        for tag, desc, fg in [
-            ("**加粗**", "强调", "#3498db"),
-            ("!!警告!!", "重要", "#e74c3c"),
-            ("??提示??", "提示", "#27ae60"),
-            ("[[目标|文字]]", "跳转", "#2980b9"),
-            ("`代码`", "等宽", "#e67e22"),
-            ("![alt](路径)", "图片", "#9b59b6"),
-        ]:
-            lbl = tk.Label(self.kw_legend_frame, text=f" {tag}={desc}",
-                           font=("Microsoft YaHei", 8), fg=fg, bg="#fff8e1")
-            lbl.pack(side=tk.LEFT, padx=(0, 2))
-        lbl2 = tk.Label(self.kw_legend_frame, text=" -列表=列表  ```代码块```=代码",
-                        font=("Microsoft YaHei", 8), fg="#8e44ad", bg="#fff8e1")
-        lbl2.pack(side=tk.LEFT)
-
         self.kw_type_line = tk.Frame(bottom_bar, bg="#fff8e1")
         self.kw_type_line.pack(fill=tk.X, pady=(2, 2))
 
-        tk.Label(self.kw_type_line, text="整卡格式:",
+        tk.Label(self.kw_type_line, text=tr("editor.card_type"),
                  font=("Microsoft YaHei", 9, "bold"),
                  bg="#fff8e1").pack(anchor=tk.W, pady=(0, 2))
         self.type_var = tk.StringVar(value="normal")
@@ -363,15 +440,18 @@ class EditorWindow:
         self.btn_frame = tk.Frame(bottom_bar, bg="#fff8e1")
         self.btn_frame.pack(fill=tk.X, pady=(2, 3))
 
-        self.btn_save = tk.Button(self.btn_frame, text="保存", font=("Microsoft YaHei", 11, "bold"),
+        self.btn_save = tk.Button(self.btn_frame, text=tr("editor.save_btn") + "  Ctrl+S", font=("Microsoft YaHei", 11, "bold"),
                                   bg="#3498db", fg="white", relief=tk.FLAT,
                                   padx=24, pady=4, cursor="hand2",
                                   command=self._save_keyword)
         self.btn_save.pack(side=tk.RIGHT, padx=(0, 4))
-        self.btn_preview = tk.Button(self.btn_frame, text="预览", font=("Microsoft YaHei", 10),
+        self.btn_preview = tk.Button(self.btn_frame, text=tr("editor.preview_btn"), font=("Microsoft YaHei", 10),
                                      bg="#95a5a6", fg="white", relief=tk.FLAT,
                                      padx=12, pady=4, cursor="hand2",
                                      command=self._preview_card)
+        tk.Button(self.btn_frame, text=tr("editor.markup_help"), font=("Microsoft YaHei", 10),
+                  bg="#f0f0f0", fg="#555", relief=tk.FLAT, padx=10, pady=4, cursor="hand2",
+                  command=self._show_markup_help).pack(side=tk.LEFT, padx=(4, 0))
 
         # Initially hide keyword-only UI (shown when keyword is selected)
         self.kw_legend_frame.pack_forget()
@@ -380,8 +460,21 @@ class EditorWindow:
 
     def _update_path_label(self):
         cfg = load_config()
-        self.path_label.config(text=f"知识库: {cfg.get('root_path', '未设置')}")
+        root_path = cfg.get('root_path', '')
+        self.path_label.config(text=f"KB: {root_path}" if root_path else tr("editor.kb_path"))
         self._update_git_button()
+
+    def _on_language_change(self, event=None):
+        display = self.lang_var.get()
+        lang = self._lang_display_to_code.get(display, "zh")
+        if lang == get_language():
+            return
+        load_language(lang)
+        from config import save_config
+        cfg = load_config()
+        cfg["language"] = lang
+        save_config(cfg)
+        messagebox.showinfo(tr("app.info"), tr("editor.lang_restart"))
 
     def _update_git_button(self):
         if self._git_btn is not None:
@@ -397,7 +490,7 @@ class EditorWindow:
         if root_path and os.path.isdir(os.path.join(root_path, ".git")):
             bg = self._bottom_frame.cget("bg")
             self._git_btn = tk.Button(
-                self._bottom_frame, text="上传到 GitHub",
+                self._bottom_frame, text=tr("editor.git_upload"),
                 font=("Microsoft YaHei", 9), fg="white", bg="#2c3e50",
                 relief=tk.FLAT, padx=10, cursor="hand2",
                 command=self._git_push
@@ -418,7 +511,7 @@ class EditorWindow:
             bg = self._bottom_frame.cget("bg")
             self._git_hint = tk.Label(
                 self._bottom_frame,
-                text="未检测到Git仓库，可执行 git init 启用自动上传",
+                text=tr("editor.git_no_repo"),
                 font=("Microsoft YaHei", 8), fg="#aaa", bg=bg,
             )
             self._git_hint.pack(side=tk.RIGHT, padx=(4, 0))
@@ -439,7 +532,7 @@ class EditorWindow:
             return
         if self._git_btn is None:
             return
-        self._git_btn.config(text="上传中...", state=tk.DISABLED)
+        self._git_btn.config(text=tr("editor.git_pushing"), state=tk.DISABLED)
         def worker():
             try:
                 subprocess.run(["git", "add", "."], cwd=root_path, check=True,
@@ -457,23 +550,23 @@ class EditorWindow:
 
     def _git_success(self):
         if self._git_btn is not None:
-            self._git_btn.config(text="上传到 GitHub", state=tk.NORMAL)
-        messagebox.showinfo("GitHub 上传", "上传成功")
+            self._git_btn.config(text=tr("editor.git_upload"), state=tk.NORMAL)
+        messagebox.showinfo(tr("app.success"), tr("editor.upload_success"))
 
     def _git_fail(self, err):
         if self._git_btn is not None:
-            self._git_btn.config(text="上传到 GitHub", state=tk.NORMAL)
+            self._git_btn.config(text=tr("editor.git_upload"), state=tk.NORMAL)
         msg = err.stderr.strip() or err.stdout.strip() or str(err)
         if "nothing to commit" in msg:
-            messagebox.showinfo("GitHub 上传", "没有需要上传的改动")
+            messagebox.showinfo(tr("app.info"), tr("editor.no_changes"))
         elif "could not read" in msg.lower() or "failed to push" in msg.lower():
-            messagebox.showerror("GitHub 上传失败", f"推送失败，请检查远程仓库配置:\n{msg}")
+            messagebox.showerror(tr("editor.git_fail_title"), tr("editor.git_fail_msg").format(msg=msg))
         else:
             messagebox.showerror("GitHub 上传失败", msg)
 
     def _git_error(self, msg):
         if self._git_btn is not None:
-            self._git_btn.config(text="上传到 GitHub", state=tk.NORMAL)
+            self._git_btn.config(text=tr("editor.git_upload"), state=tk.NORMAL)
         messagebox.showerror("GitHub 上传失败", msg)
 
     def _update_type_color(self):
@@ -529,9 +622,9 @@ class EditorWindow:
             btn_frame.pack_propagate(False)
             inner = tk.Frame(btn_frame, bg=color)
             inner.pack(fill=tk.BOTH, expand=True, padx=2, pady=inpady)
-            tk.Label(inner, text=label, font=btn_font,
+            tk.Label(inner, text=tr(label), font=btn_font,
                      fg="white", bg=color).pack(anchor=tk.W, padx=(10, 4), pady=label_pady)
-            tk.Label(inner, text=desc, font=desc_font,
+            tk.Label(inner, text=tr(desc), font=desc_font,
                      fg="#e8f0ff", bg=color).pack(anchor=tk.W, padx=(10, 4), pady=desc_pady)
 
             def make_handlers(v, c, bf, inner):
@@ -562,15 +655,42 @@ class EditorWindow:
         return frame
 
     def _refresh_tree(self):
+        # Save expanded state and selection before rebuild
+        expanded = set()
+        sel_key = None
+        sel = self.tree.selection()
+        if sel:
+            item = sel[0]
+            parent_id = self.tree.parent(item)
+            grandparent_id = self.tree.parent(parent_id) if parent_id else ""
+            name = self._strip_emoji(self.tree.item(item, "text"))
+            if not parent_id:
+                sel_key = ("subject", name)
+            elif not grandparent_id:
+                sel_key = ("chapter", name)
+            else:
+                sel_key = ("keyword", name)
+        for item in self.tree.get_children(""):
+            if self.tree.item(item, "open"):
+                expanded.add(("subject", self._strip_emoji(self.tree.item(item, "text"))))
+            for child in self.tree.get_children(item):
+                if self.tree.item(child, "open"):
+                    expanded.add(("chapter", self._strip_emoji(self.tree.item(child, "text"))))
+
         self.tree.delete(*self.tree.get_children())
         for subject in self.db.list_subjects():
-            sid = self.tree.insert("", tk.END, text=f"📚 {subject}", open=False)
+            opened = ("subject", subject) in expanded
+            sid = self.tree.insert("", tk.END, text=f"📚 {subject}", open=opened)
             for chapter in self.db.list_chapters(subject):
-                cid = self.tree.insert(sid, tk.END, text=f"📖 {chapter}", open=False)
+                opened = ("chapter", chapter) in expanded
+                cid = self.tree.insert(sid, tk.END, text=f"📖 {chapter}", open=opened)
                 for kw in self.db.list_keywords(subject, chapter):
                     self.tree.insert(cid, tk.END, text=f"💡 {kw}")
         self._refresh_primary_subjects()
         self._apply_tree_filter()
+        # Restore selection
+        if sel_key:
+            self._select_tree_item(sel_key)
 
     def _apply_tree_filter(self):
         query = self.search_var.get().strip().lower() if hasattr(self, 'search_var') else ""
@@ -604,22 +724,7 @@ class EditorWindow:
 
     def _do_filter_tree(self):
         self._search_after_id = None
-        sel = self.tree.selection()
-        sel_key = None
-        if sel:
-            item = sel[0]
-            parent_id = self.tree.parent(item)
-            grandparent_id = self.tree.parent(parent_id) if parent_id else ""
-            name = self._strip_emoji(self.tree.item(item, "text"))
-            if not parent_id:
-                sel_key = ("subject", name)
-            elif not grandparent_id:
-                sel_key = ("chapter", name)
-            else:
-                sel_key = ("keyword", name)
         self._refresh_tree()
-        if sel_key:
-            self._select_tree_item(sel_key)
 
     def _select_tree_item(self, key):
         typ, name = key
@@ -695,6 +800,10 @@ class EditorWindow:
             self.current_keyword = None
             self._load_chapter_desc(text)
         else:
+            nav_programmatic = self._nav_ignore
+            self._nav_ignore = False
+            if not nav_programmatic:
+                self._nav_visit()
             self.current_subject = self._strip_emoji(
                 self.tree.item(grandparent_id, "text"))
             self.current_chapter = self._strip_emoji(
@@ -720,6 +829,7 @@ class EditorWindow:
         self.empty_label.pack(expand=True)
         self.form_frame.pack_forget()
         self.desc_frame.pack_forget()
+        self.dir_frame.pack_forget()
         self.kw_legend_frame.pack_forget()
         self.kw_type_line.pack_forget()
         self.btn_preview.pack_forget()
@@ -727,13 +837,14 @@ class EditorWindow:
         self.related_outer.pack_forget()
         self._related_topics = []
         self._related_drawer_open = False
-        self.empty_label.config(text=msg if msg else "请选择一个关键词进行编辑")
+        self.empty_label.config(text=msg if msg else tr("editor.empty_select"))
         self._editing_type = None
         self.bottom_bar_container.config(height=32)
 
     def _show_form(self):
         self.empty_label.pack_forget()
         self.desc_frame.pack_forget()
+        self.dir_frame.pack_forget()
         self.form_frame.pack(fill=tk.BOTH, expand=True)
         self.kw_legend_frame.pack(fill=tk.X, pady=(4, 2))
         self.kw_type_line.pack(fill=tk.X, pady=(2, 2))
@@ -749,12 +860,27 @@ class EditorWindow:
     def _show_desc_form(self):
         self.empty_label.pack_forget()
         self.form_frame.pack_forget()
+        self.dir_frame.pack_forget()
         self.kw_legend_frame.pack_forget()
         self.kw_type_line.pack_forget()
         self.btn_preview.pack_forget()
         self.btn_frame.pack_forget()
         self.desc_frame.pack(fill=tk.BOTH, expand=True)
         self.bottom_bar_container.config(height=32)
+
+    def _show_dir_page(self):
+        self.empty_label.pack_forget()
+        self.form_frame.pack_forget()
+        self.kw_legend_frame.pack_forget()
+        self.kw_type_line.pack_forget()
+        self.related_outer.pack_forget()
+        self.desc_frame.pack(fill=tk.X, pady=(0, 2))
+        self.dir_frame.pack(fill=tk.BOTH, expand=True, pady=(2, 4))
+        # Show save button in bottom bar (no preview, no keyword UI)
+        self.btn_preview.pack_forget()
+        self.btn_frame.pack(fill=tk.X, pady=(2, 3))
+        self.btn_save.config(text=tr("editor.save_desc"), bg="#3498db", command=self._save_keyword)
+        self.bottom_bar_container.config(height=50)
 
     def _load_keyword(self):
         if not self.current_subject or not self.current_chapter or not self.current_keyword:
@@ -764,7 +890,7 @@ class EditorWindow:
             self.current_subject, self.current_chapter, self.current_keyword
         )
         if data is None:
-            self._show_empty("未找到数据")
+            self._show_empty(tr("editor.empty_no_data"))
             return
 
         self._show_form()
@@ -777,7 +903,9 @@ class EditorWindow:
         self.knowledge_text.config(state=tk.NORMAL)
         self.knowledge_text.delete("1.0", tk.END)
         self.knowledge_text.insert("1.0", data.get("knowledge", ""))
+        knowledge_text = data.get("knowledge", "")
         self._related_topics = data.get("related", [])
+        self._sync_related_from_content(knowledge_text)
         self._refresh_related_search()
         self._render_related_topics()
         self._update_related_count()
@@ -786,22 +914,114 @@ class EditorWindow:
         self._switch_to_read_mode()
 
     def _load_subject_desc(self, subject):
-        self._show_desc_form()
-        self.desc_title.config(text=f"📁 学科: {subject}")
+        self._show_dir_page()
+        self.desc_title.config(text="📁 " + tr("editor.subject") + f": {subject}")
         self.desc_text.config(state=tk.NORMAL)
         self.desc_text.delete("1.0", tk.END)
         desc = self.db.get_subject_description(subject)
         self.desc_text.insert("1.0", desc)
         self._editing_type = "subject"
 
+        # Clear and populate directory
+        for w in self.dir_inner.winfo_children():
+            w.destroy()
+
+        chapters = self.db.list_chapters(subject)
+        if not chapters:
+            tk.Label(self.dir_inner, text=tr("editor.no_chapters"), font=("Microsoft YaHei", 9),
+                     fg="#999", bg="#fafafa").pack(anchor=tk.W, pady=(4, 0))
+        else:
+            tk.Label(self.dir_inner, text="📖 " + tr("editor.subject_dir") + f" ({len(chapters)} " + tr("chapters") + ")",
+                     font=("Microsoft YaHei", 10, "bold"), bg="#fafafa",
+                     anchor=tk.W).pack(fill=tk.X, pady=(4, 2))
+            for ch in chapters:
+                kws = self.db.list_keywords(subject, ch)
+                ch_frame = tk.Frame(self.dir_inner, bg="#f5f5f5", relief=tk.GROOVE, bd=1)
+                ch_frame.pack(fill=tk.X, pady=(2, 0), padx=4)
+                header = tk.Label(ch_frame, text="  📖 " + ch + f"  ({len(kws)} " + tr("keywords") + ")",
+                                  font=("Microsoft YaHei", 9, "bold"), bg="#f5f5f5",
+                                  anchor=tk.W, cursor="hand2", fg="#2c3e50")
+                header.pack(fill=tk.X, padx=4, pady=2)
+                header.bind("<Button-1>", lambda e, s=subject, c=ch:
+                    self._select_tree_item(("chapter", c)) if hasattr(self, '_select_tree_item') else None)
+                if kws:
+                    for kw in kws:
+                        lbl = tk.Label(ch_frame, text=f"    💡 {kw}",
+                                       font=("Microsoft YaHei", 9), fg="#2980b9",
+                                       bg="#f5f5f5", cursor="hand2", anchor=tk.W)
+                        lbl.pack(fill=tk.X, padx=(24, 4), pady=1)
+                        lbl.bind("<Button-1>", lambda e, k=kw:
+                            self.navigate_to_keyword(k))
+                else:
+                    tk.Label(ch_frame, text="    " + tr("editor.empty_chapter"), font=("Microsoft YaHei", 8),
+                             fg="#aaa", bg="#f5f5f5", anchor=tk.W).pack(fill=tk.X, padx=(24, 4))
+
+        # Pins section
+        pins = self.db.collect_pins(subject)
+        if pins:
+            tk.Label(self.dir_inner, text="\n📍 " + tr("editor.pin_section") + f" ({sum(len(v) for v in pins.values())} " + tr("pin.count") + ")",
+                     font=("Microsoft YaHei", 10, "bold"), bg="#fafafa",
+                     anchor=tk.W).pack(fill=tk.X, pady=(8, 2))
+            pin_line = tk.Frame(self.dir_inner, bg="#fafafa")
+            pin_line.pack(fill=tk.X, padx=4)
+            for pin_word in sorted(pins.keys()):
+                chapters_kws = ", ".join(f"{ch}/{kw}" for ch, kw in pins[pin_word])
+                lbl = tk.Label(pin_line, text=f"📌 {pin_word}",
+                               font=("Microsoft YaHei", 9), fg="#8e44ad",
+                               bg="#fafafa", cursor="hand2")
+                lbl.pack(side=tk.LEFT, padx=(0, 12))
+                def _pin_click(pin_word, targets):
+                    first = targets[0] if targets else None
+                    if first:
+                        self.navigate_to_keyword(first[1])
+                lbl.bind("<Button-1>", lambda e, w=pin_word, p=pins:
+                    _pin_click(w, p[w]))
+
     def _load_chapter_desc(self, chapter):
-        self._show_desc_form()
+        self._show_dir_page()
         self.desc_title.config(text=f"📂 {self.current_subject} → {chapter}")
         self.desc_text.config(state=tk.NORMAL)
         self.desc_text.delete("1.0", tk.END)
         desc = self.db.get_chapter_description(self.current_subject, chapter)
         self.desc_text.insert("1.0", desc)
         self._editing_type = "chapter"
+
+        # Clear and populate directory
+        for w in self.dir_inner.winfo_children():
+            w.destroy()
+
+        kws = self.db.list_keywords(self.current_subject, chapter)
+        tk.Label(self.dir_inner, text="📋 " + tr("editor.chapter_dir") + f" ({len(kws)} " + tr("keywords") + ")",
+                 font=("Microsoft YaHei", 10, "bold"), bg="#fafafa",
+                 anchor=tk.W).pack(fill=tk.X, pady=(4, 2))
+
+        if not kws:
+            tk.Label(self.dir_inner, text=tr("editor.no_keywords"), font=("Microsoft YaHei", 9),
+                     fg="#999", bg="#fafafa").pack(anchor=tk.W, padx=4)
+        else:
+            for kw in kws:
+                lbl = tk.Label(self.dir_inner, text=f"  💡 {kw}",
+                               font=("Microsoft YaHei", 9), fg="#2980b9",
+                               bg="#fafafa", cursor="hand2", anchor=tk.W)
+                lbl.pack(fill=tk.X, padx=(8, 4), pady=1)
+                lbl.bind("<Button-1>", lambda e, k=kw:
+                    self.navigate_to_keyword(k))
+
+        # Pins section
+        pins = self.db.collect_pins(self.current_subject, chapter)
+        if pins:
+            tk.Label(self.dir_inner, text="\n📍 " + tr("editor.pin_section") + f" ({sum(len(v) for v in pins.values())} " + tr("pin.count") + ")",
+                     font=("Microsoft YaHei", 10, "bold"), bg="#fafafa",
+                     anchor=tk.W).pack(fill=tk.X, pady=(8, 2))
+            pin_line = tk.Frame(self.dir_inner, bg="#fafafa")
+            pin_line.pack(fill=tk.X, padx=4)
+            for pin_word in sorted(pins.keys()):
+                lbl = tk.Label(pin_line, text=f"📌 {pin_word}",
+                               font=("Microsoft YaHei", 9), fg="#8e44ad",
+                               bg="#fafafa", cursor="hand2")
+                lbl.pack(side=tk.LEFT, padx=(0, 12))
+                lbl.bind("<Button-1>", lambda e, w=pin_word:
+                    self.navigate_to_keyword(pins[w][0][1]) if pins[w] else None)
 
     def _refresh_related_search(self):
         all_kw = self.db.list_all_keywords()
@@ -1056,7 +1276,28 @@ class EditorWindow:
         n = len(self._related_topics)
         self.related_count_lbl.config(text=f"({n})")
 
+    def _sync_related_from_content(self, knowledge_text):
+        import re
+        existing_keys = {(r["subject"], r["chapter"], r["keyword"]) for r in self._related_topics}
+        all_items = self.db.list_all_keywords()
+        kw_map = {}
+        for subj, ch, kw in all_items:
+            if kw not in kw_map:
+                kw_map[kw] = (subj, ch)
+        for m in re.finditer(r'\[\[([^\]|]+)(?:\|([^\]]+))?\]\]', knowledge_text):
+            target_kw = m.group(1)
+            if target_kw in kw_map:
+                subj, ch = kw_map[target_kw]
+                key = (subj, ch, target_kw)
+                if key not in existing_keys:
+                    self._related_topics.append({
+                        "subject": subj, "chapter": ch,
+                        "keyword": target_kw, "display": target_kw
+                    })
+                    existing_keys.add(key)
+
     def _render_knowledge(self, text, ktype):
+        text = expand_linkmap(text)
         import re as _re
         self.knowledge_text.delete("1.0", tk.END)
         default_fg = "#2c3e50"
@@ -1066,10 +1307,15 @@ class EditorWindow:
         self.knowledge_text.tag_config("r_tip", foreground="#27ae60", font=("Microsoft YaHei", 10))
         self.knowledge_text.tag_config("r_warning", foreground="#e74c3c", font=("Microsoft YaHei", 10, "bold"))
         self.knowledge_text.tag_config("r_link", foreground="#2980b9", underline=1, font=("Microsoft YaHei", 10))
+        self.knowledge_text.tag_config("r_pin", foreground="#8e44ad", font=("Microsoft YaHei", 10, "bold"))
         self.knowledge_text.tag_config("r_bullet", foreground=default_fg, lmargin1=10, lmargin2=24)
         self.knowledge_text.tag_config("r_code", foreground="#e67e22", font=("Consolas", 11, "bold"),
                                         background="#2d2d2d", relief=tk.GROOVE, borderwidth=1,
                                         overstrike=False, underline=False, spacing1=2, spacing3=2)
+        for lvl, size in [(1, 16), (2, 14), (3, 12)]:
+            self.knowledge_text.tag_config(f"r_h{lvl}",
+                font=("Microsoft YaHei", size, "bold"), foreground="#2c3e50",
+                spacing1=6, spacing3=2)
         self._link_tag_counter = getattr(self, "_link_tag_counter", 0) + 1
         link_base = self._link_tag_counter
         pattern = r'(!\[.*?\]\([^)]+\)|\[\[.*?\]\]|\*\*.*?\*\*|!!.*?!!|\?\?.*?\?\?|`.*?`)'
@@ -1093,11 +1339,31 @@ class EditorWindow:
                 continue
             # Normal line processing
             bullet = False
+            heading_tag = ""
             rest = line
-            if line.startswith("- ") or line.startswith("* "):
+            if rest.startswith("- ") or rest.startswith("* "):
                 bullet = True
-                rest = line[2:]
-                self.knowledge_text.insert(tk.END, "  • ", "r_bullet")
+                rest = rest[2:]
+                if rest.startswith("### "):
+                    heading_tag = "r_h3"
+                    rest = rest[4:]
+                elif rest.startswith("## "):
+                    heading_tag = "r_h2"
+                    rest = rest[3:]
+                elif rest.startswith("# "):
+                    heading_tag = "r_h1"
+                    rest = rest[2:]
+                self.knowledge_text.insert(tk.END, "  • ", "r_bullet" if not heading_tag else heading_tag)
+            else:
+                if rest.startswith("### "):
+                    heading_tag = "r_h3"
+                    rest = rest[4:]
+                elif rest.startswith("## "):
+                    heading_tag = "r_h2"
+                    rest = rest[3:]
+                elif rest.startswith("# "):
+                    heading_tag = "r_h1"
+                    rest = rest[2:]
             parts = _re.split(pattern, rest)
             for part in parts:
                 if part.startswith("![") and part.endswith(")"):
@@ -1108,19 +1374,32 @@ class EditorWindow:
                         self._render_image(img_name, alt_text)
                 elif part.startswith("[[") and part.endswith("]]"):
                     inner = part[2:-2]
-                    if "|" in inner:
+                    if inner.startswith("pin:"):
+                        pin_word = inner[4:]
+                        pin_display = pin_word.split("|", 1)[0] if "|" in pin_word else pin_word
+                        tags = ("r_bullet", "r_pin") if bullet else ("r_pin",)
+                        self.knowledge_text.insert(tk.END, f"📌 {pin_display}", tags)
+                    elif "|" in inner:
                         kw, display = inner.split("|", 1)
+                        link_idx += 1
+                        tag = f"_r_link_{link_base}_{link_idx}"
+                        self.knowledge_text.tag_config(tag, foreground="#2980b9", underline=1, font=("Microsoft YaHei", 10))
+                        self.knowledge_text.tag_bind(tag, "<Button-1>", lambda e, k=kw: self.navigate_to_keyword(k))
+                        self.knowledge_text.tag_bind(tag, "<Enter>", lambda e: self.knowledge_text.config(cursor="hand2"))
+                        self.knowledge_text.tag_bind(tag, "<Leave>", lambda e: self.knowledge_text.config(cursor=""))
+                        tags = ("r_bullet", tag) if bullet else (tag,)
+                        self.knowledge_text.insert(tk.END, display, tags)
                     else:
                         kw = inner
                         display = inner
-                    link_idx += 1
-                    tag = f"_r_link_{link_base}_{link_idx}"
-                    self.knowledge_text.tag_config(tag, foreground="#2980b9", underline=1, font=("Microsoft YaHei", 10))
-                    self.knowledge_text.tag_bind(tag, "<Button-1>", lambda e, k=kw: self.navigate_to_keyword(k))
-                    self.knowledge_text.tag_bind(tag, "<Enter>", lambda e: self.knowledge_text.config(cursor="hand2"))
-                    self.knowledge_text.tag_bind(tag, "<Leave>", lambda e: self.knowledge_text.config(cursor=""))
-                    tags = ("r_bullet", tag) if bullet else (tag,)
-                    self.knowledge_text.insert(tk.END, display, tags)
+                        link_idx += 1
+                        tag = f"_r_link_{link_base}_{link_idx}"
+                        self.knowledge_text.tag_config(tag, foreground="#2980b9", underline=1, font=("Microsoft YaHei", 10))
+                        self.knowledge_text.tag_bind(tag, "<Button-1>", lambda e, k=kw: self.navigate_to_keyword(k))
+                        self.knowledge_text.tag_bind(tag, "<Enter>", lambda e: self.knowledge_text.config(cursor="hand2"))
+                        self.knowledge_text.tag_bind(tag, "<Leave>", lambda e: self.knowledge_text.config(cursor=""))
+                        tags = ("r_bullet", tag) if bullet else (tag,)
+                        self.knowledge_text.insert(tk.END, display, tags)
                 elif part.startswith("**") and part.endswith("**"):
                     tags = ("r_bullet", "r_highlight") if bullet else ("r_highlight",)
                     self.knowledge_text.insert(tk.END, part[2:-2], tags)
@@ -1134,7 +1413,7 @@ class EditorWindow:
                     tags = ("r_bullet", "r_code") if bullet else ("r_code",)
                     self.knowledge_text.insert(tk.END, part[1:-1].replace(" ", "\u00a0"), tags)
                 elif part:
-                    tag = "r_bullet" if bullet else "r_normal"
+                    tag = heading_tag or ("r_bullet" if bullet else "r_normal")
                     self.knowledge_text.insert(tk.END, part, tag)
             self.knowledge_text.insert(tk.END, "\n")
             i += 1
@@ -1332,6 +1611,11 @@ class EditorWindow:
             
             i += 1
 
+    def _on_enter_in_knowledge(self, event):
+        if self._read_mode and self._editing_type == "keyword":
+            self._switch_to_edit_mode()
+            return "break"
+
     def _switch_to_read_mode(self):
         self._read_mode = True
         self._raw_knowledge = self.knowledge_text.get("1.0", tk.END).strip()
@@ -1340,7 +1624,7 @@ class EditorWindow:
         self.keyword_entry.config(state="readonly")
         self.kw_legend_frame.pack_forget()
         self.kw_type_line.pack_forget()
-        self.btn_save.config(text="编辑", bg="#2ecc71", command=self._switch_to_edit_mode)
+        self.btn_save.config(text=tr("editor.edit_btn") + "  ↵", bg="#2ecc71", command=self._switch_to_edit_mode)
         self.btn_preview.pack_forget()
         self.bottom_bar_container.config(height=32)
 
@@ -1355,7 +1639,7 @@ class EditorWindow:
         self.keyword_entry.config(state="normal")
         self.kw_legend_frame.pack(fill=tk.X, pady=(4, 2))
         self.kw_type_line.pack(fill=tk.X, pady=(2, 2))
-        self.btn_save.config(text="保存", bg="#3498db", command=self._save_keyword)
+        self.btn_save.config(text=tr("editor.save_btn") + "  Ctrl+S", bg="#3498db", command=self._save_keyword)
         self.btn_preview.pack(side=tk.RIGHT, padx=(0, 6))
         self.bottom_bar_container.config(height=140)
 
@@ -1367,23 +1651,25 @@ class EditorWindow:
             desc = self.desc_text.get("1.0", tk.END).strip()
             self.db.save_subject_description(self.current_subject, desc)
             self._dirty = False
-            messagebox.showinfo("成功", "学科描述已保存")
+            messagebox.showinfo(tr("app.success"), tr("editor.saved_subject"))
             return
         if self._editing_type == "chapter":
             desc = self.desc_text.get("1.0", tk.END).strip()
             self.db.save_chapter_description(self.current_subject, self.current_chapter, desc)
             self._dirty = False
-            messagebox.showinfo("成功", "章节描述已保存")
+            messagebox.showinfo(tr("app.success"), tr("editor.saved_chapter"))
             return
         if not self.current_subject or not self.current_chapter or not self.current_keyword:
-            messagebox.showwarning("提示", "请先选择一个关键词")
+            messagebox.showwarning(tr("app.warning"), tr("editor.warn_select"))
             return
         kw = self.keyword_entry.get().strip()
         knowledge = self.knowledge_text.get("1.0", tk.END).strip()
         kt = self.type_var.get()
         if not kw or not knowledge:
-            messagebox.showwarning("提示", "关键词和内容不能为空")
+            messagebox.showwarning(tr("app.warning"), tr("editor.warn_input"))
             return
+
+        self._sync_related_from_content(knowledge)
 
         renamed = kw != self.current_keyword
         old_kw = self.current_keyword if renamed else None
@@ -1441,6 +1727,63 @@ class EditorWindow:
     def _clear_preview(self):
         self._preview_popup = None
 
+    def _show_markup_help(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title(tr("markup.help_title"))
+        dialog.geometry("500x420")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - 500) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - 420) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        header = tk.Frame(dialog, bg="#3498db", height=40)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        tk.Label(header, text="📖 " + tr("markup.help_title"), font=("Microsoft YaHei", 12, "bold"),
+                 fg="white", bg="#3498db").pack(expand=True)
+
+        text = tk.Text(dialog, font=("Microsoft YaHei", 10), wrap=tk.WORD,
+                       bg="white", relief=tk.SUNKEN, borderwidth=1, padx=12, pady=8)
+        scrollbar = tk.Scrollbar(dialog, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=8)
+
+        text.tag_config("h", font=("Microsoft YaHei", 11, "bold"), foreground="#2c3e50",
+                        spacing1=6, spacing3=2)
+        text.tag_config("red", foreground="#e74c3c", font=("Microsoft YaHei", 9, "bold"))
+        text.tag_config("blue", foreground="#3498db", font=("Microsoft YaHei", 9, "bold"))
+        text.tag_config("orange", foreground="#e67e22", font=("Microsoft YaHei", 9, "bold"))
+        text.tag_config("code", font=("Consolas", 9), foreground="#555", background="#f9f9f9",
+                        spacing1=1, spacing3=1)
+
+        text.insert(tk.END, "📐 " + tr("markup.heading") + "\n", "h")
+        text.insert(tk.END, "# H1\n## H2\n### H3\n\n", "code")
+        text.insert(tk.END, "🖍 " + tr("markup.bold") + "\n", "h")
+        text.insert(tk.END, "**" + tr("markup.bold") + "**\n\n", "code")
+        text.insert(tk.END, "⚠️ " + tr("markup.warning") + "\n", "h")
+        text.insert(tk.END, "!!" + tr("markup.warning") + "!!\n\n", "code")
+        text.insert(tk.END, "💡 " + tr("markup.tip") + "\n", "h")
+        text.insert(tk.END, "??" + tr("markup.tip") + "??\n\n", "code")
+        text.insert(tk.END, "🔗 " + tr("markup.link") + "\n", "h")
+        text.insert(tk.END, "[[" + tr("markup.link") + "]]\n[[target|display]]\n\n", "code")
+        text.insert(tk.END, "📍 " + tr("markup.pin") + "\n", "h")
+        text.insert(tk.END, "[[pin:word]]\n\n", "code")
+        text.insert(tk.END, "🖼 " + tr("markup.image") + "\n", "h")
+        text.insert(tk.END, "![alt](file.png)\n\n", "code")
+        text.insert(tk.END, "💻 " + tr("markup.code_block") + "\n", "h")
+        text.insert(tk.END, "```python\nprint(\"hello\")\n```\n\n", "code")
+        text.insert(tk.END, "📄 " + tr("markup.inline_code") + "\n", "h")
+        text.insert(tk.END, "`" + tr("markup.code") + "`\n\n", "code")
+        text.insert(tk.END, "📋 " + tr("markup.list") + "\n", "h")
+        text.insert(tk.END, "- " + tr("markup.item") + "\n* " + tr("markup.item") + "\n\n", "code")
+        text.insert(tk.END, "🔁 " + tr("markup.linkmap") + "\n", "h")
+        text.insert(tk.END, "[linkmap]\n" + tr("markup.linkmap_src") + " -> " + tr("markup.linkmap_target") + "\n[/linkmap]", "code")
+
+        text.config(state=tk.DISABLED)
+
     def _cleanup_orphan_images(self):
         try:
             count = self.db.cleanup_all_orphan_images()
@@ -1452,7 +1795,7 @@ class EditorWindow:
 
     def _insert_image_dialog(self):
         if self._editing_type != "keyword":
-            messagebox.showinfo("提示", "请先选择一个关键词进行编辑")
+            messagebox.showinfo(tr("app.warning"), tr("editor.warn_select"))
             return
         
         self.image_status_label.config(text="📷 正在选择图片...", fg="#3498db")
@@ -1526,7 +1869,29 @@ class EditorWindow:
                         return
 
 
+    def _nav_visit(self):
+        if self.current_subject and self.current_chapter and self.current_keyword:
+            entry = (self.current_subject, self.current_chapter, self.current_keyword)
+            if not self._nav_stack or self._nav_stack[-1] != entry:
+                self._nav_stack.append(entry)
+        self._update_nav_buttons()
+
+    def _nav_back(self):
+        if self._nav_stack:
+            entry = self._nav_stack.pop()
+            self._nav_ignore = True
+            self._select_keyword_in_tree(entry[2])
+        self._update_nav_buttons()
+
+    def _update_nav_buttons(self):
+        try:
+            self.nav_back_btn.config(state=tk.NORMAL if self._nav_stack else tk.DISABLED)
+        except Exception:
+            pass
+
     def navigate_to_keyword(self, keyword):
+        self._nav_visit()
+        self._nav_ignore = True
         self._select_keyword_in_tree(keyword)
 
     def _refresh_primary_subjects(self):
@@ -1593,7 +1958,7 @@ class EditorWindow:
         dialog.grab_set()
         self._center_dialog(dialog)
 
-        tk.Label(dialog, text=f"学科: {self.current_subject}", font=("Microsoft YaHei", 9),
+        tk.Label(dialog, text=tr("editor.subject") + f": {self.current_subject}", font=("Microsoft YaHei", 9),
                  fg="gray").pack(pady=(8, 0))
         tk.Label(dialog, text="章节名称:", font=("Microsoft YaHei", 10)).pack(pady=(4, 0))
         entry = tk.Entry(dialog, font=("Microsoft YaHei", 11))
@@ -1626,10 +1991,10 @@ class EditorWindow:
         dialog.grab_set()
         self._center_dialog(dialog, 450, 340)
 
-        tk.Label(dialog, text=f"学科: {self.current_subject}  >  {self.current_chapter}",
+        tk.Label(dialog, text=tr("editor.subject") + f": {self.current_subject}  >  {self.current_chapter}",
                  font=("Microsoft YaHei", 9), fg="gray").pack(pady=(6, 0))
 
-        tk.Label(dialog, text="关键词:", font=("Microsoft YaHei", 10)).pack(pady=(4, 0))
+        tk.Label(dialog, text=tr("editor.keyword_label") + ":", font=("Microsoft YaHei", 10)).pack(pady=(4, 0))
         kw_entry = tk.Entry(dialog, font=("Microsoft YaHei", 11))
         kw_entry.pack(padx=20, fill=tk.X, ipady=2)
         kw_entry.focus_set()
@@ -1691,11 +2056,11 @@ class EditorWindow:
         lines = []
         for entry in items_to_delete:
             if entry[0] == "subject":
-                lines.append(f"  学科: {entry[1]}")
+                lines.append("  " + tr("editor.subject") + f": {entry[1]}")
             elif entry[0] == "chapter":
-                lines.append(f"  章节: {entry[1]} → {entry[2]}")
+                lines.append("  " + tr("editor.chapter") + f": {entry[1]} → {entry[2]}")
             else:
-                lines.append(f"  关键词: {entry[1]} → {entry[2]} → {entry[3]}")
+                lines.append("  " + tr("editor.keyword_label") + f": {entry[1]} → {entry[2]} → {entry[3]}")
         msg = f"确定要删除以下 {len(items_to_delete)} 个项目？\n\n" + "\n".join(lines)
         if not messagebox.askyesno("确认", msg):
             return
@@ -1722,8 +2087,8 @@ class EditorWindow:
             self.tree.selection_set(item)
         menu = tk.Menu(self.root, tearoff=0, font=("Microsoft YaHei", 9))
         if len(self.tree.selection()) == 1:
-            menu.add_command(label="重命名", command=self._rename_selected)
-        menu.add_command(label="删除", command=self._delete_selected)
+            menu.add_command(label=tr("editor.rename_btn"), command=self._rename_selected)
+        menu.add_command(label=tr("editor.delete_btn"), command=self._delete_selected)
         menu.post(event.x_root, event.y_root)
 
     def _rename_selected(self):
@@ -1790,9 +2155,9 @@ class EditorWindow:
         dialog.grab_set()
         self._center_dialog(dialog)
 
-        tk.Label(dialog, text=f"学科: {subject}", font=("Microsoft YaHei", 9),
+        tk.Label(dialog, text=tr("editor.subject") + f": {subject}", font=("Microsoft YaHei", 9),
                  fg="gray").pack(pady=(8, 0))
-        tk.Label(dialog, text="章节名称:", font=("Microsoft YaHei", 10)).pack(pady=(4, 0))
+        tk.Label(dialog, text=tr("editor.chapter") + ":", font=("Microsoft YaHei", 10)).pack(pady=(4, 0))
         entry = tk.Entry(dialog, font=("Microsoft YaHei", 11))
         entry.insert(0, old_name)
         entry.pack(padx=20, fill=tk.X, ipady=2)
@@ -1819,7 +2184,7 @@ class EditorWindow:
         dialog.bind("<Return>", lambda e: confirm())
 
     def _rename_keyword(self, item, old_name):
-        messagebox.showinfo("提示", "在右侧编辑区修改关键词名称后点击「保存」即可重命名")
+        messagebox.showinfo(tr("app.info"), tr("editor.rename_hint"))
 
     def _change_root_path(self):
         path = filedialog.askdirectory(title="选择知识数据库根路径")

@@ -7,6 +7,7 @@ from datetime import datetime
 
 from db import KnowledgeBase
 from config import load_config
+from i18n import tr
 from popup_window import show_popup
 
 
@@ -14,7 +15,7 @@ class Notifier:
     def __init__(self, root):
         self.root = root
         self.root.withdraw()
-        self.root.title("PopNotification - 后台运行")
+        self.root.title(tr("app.name"))
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         cfg = load_config()
@@ -33,6 +34,8 @@ class Notifier:
         self._cmd_queue = queue.Queue()
         self._next_check_at = time.time() + self.check_interval_ms / 1000
         self._tray_status = ""
+        self._snoozed_until = {}
+        self._batch_review_mode = False
 
         self._setup_tray()
         self._schedule_check()
@@ -82,7 +85,7 @@ class Notifier:
 
             def build_subject_items():
                 items = [pystray.MenuItem(
-                    "全部科目", set_subject(""),
+                    tr("notifier.all_subjects"), set_subject(""),
                     checked=lambda item: self._primary_subject == ""
                 )]
                 for s in self.db.list_subjects():
@@ -93,14 +96,14 @@ class Notifier:
                 return items
 
             menu = pystray.Menu(
-                pystray.MenuItem("打开编辑器", on_open, default=True),
-                pystray.MenuItem("立即检查", on_check),
-                pystray.MenuItem("复习科目", pystray.Menu(build_subject_items)),
-                pystray.MenuItem("统计信息", on_stats),
-                pystray.MenuItem("退出", on_quit),
+                pystray.MenuItem(tr("notifier.tray_show"), on_open, default=True),
+                pystray.MenuItem(tr("notifier.check_update"), on_check),
+                pystray.MenuItem(tr("notifier.review_subject"), pystray.Menu(build_subject_items)),
+                pystray.MenuItem(tr("notifier.stats"), on_stats),
+                pystray.MenuItem(tr("notifier.tray_exit"), on_quit),
             )
 
-            self._tray_icon = pystray.Icon("PopNotification", img, "知识提醒", menu)
+            self._tray_icon = pystray.Icon("BubbleMind", img, tr("app.name"), menu)
             t = threading.Thread(target=self._tray_icon.run, daemon=True)
             t.start()
 
@@ -112,13 +115,13 @@ class Notifier:
     def _show_fallback(self):
         mini_frame = tk.Frame(self.root, bg="#f0f0f0")
         mini_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        tk.Label(mini_frame, text="PopNotification 正在后台运行",
+        tk.Label(mini_frame, text=tr("app.name"),
                  font=("Microsoft YaHei", 12)).pack(pady=10)
-        tk.Button(mini_frame, text="打开编辑器", font=("Microsoft YaHei", 10),
+        tk.Button(mini_frame, text=tr("notifier.tray_show"), font=("Microsoft YaHei", 10),
                   command=self._open_editor).pack(pady=4)
-        tk.Button(mini_frame, text="立即检查", font=("Microsoft YaHei", 10),
+        tk.Button(mini_frame, text=tr("notifier.check_update"), font=("Microsoft YaHei", 10),
                   command=self._check_now).pack(pady=4)
-        tk.Button(mini_frame, text="退出", font=("Microsoft YaHei", 10),
+        tk.Button(mini_frame, text=tr("notifier.tray_exit"), font=("Microsoft YaHei", 10),
                   command=self._quit_app).pack(pady=4)
         self.root.deiconify()
 
@@ -150,9 +153,9 @@ class Notifier:
                 if remaining > 0:
                     mins = int(remaining // 60)
                     secs = int(remaining % 60)
-                    text = f"下次弹出: {mins}分{secs}秒"
+                    text = f"Next: {mins}m{secs}s"
                 else:
-                    text = "正在检查..."
+                    text = tr("notifier.checking")
             try:
                 self._tray_icon.title = text
             except Exception:
@@ -169,6 +172,8 @@ class Notifier:
     def _check_now(self, silent=False):
         try:
             self._ensure_date_reset()
+            now = time.time()
+            self._snoozed_until = {k: v for k, v in self._snoozed_until.items() if v > now}
             items = self.db.get_all_due_items()
             if self._primary_subject:
                 items = [it for it in items if it["subject"] == self._primary_subject]
@@ -176,23 +181,29 @@ class Notifier:
                 it for it in items
                 if (it["subject"], it["chapter"], it["keyword"]) not in self.suppressed_items
                 and (it["subject"], it["chapter"], it["keyword"]) not in self._active_item_keys
+                and (it["subject"], it["chapter"], it["keyword"]) not in self._snoozed_until
             ]
-            best = self._pick_best(candidates)
-            if best:
-                if self.active_popups:
-                    self._tray_status = f"队列待复习: {len(candidates)} 张卡片"
+            if candidates:
+                if self._batch_review_mode:
+                    best = self._pick_best(candidates)
+                    if best:
+                        key = (best["subject"], best["chapter"], best["keyword"])
+                        self._active_item_keys.add(key)
+                        self._today_popup_counts[key] = self._today_popup_counts.get(key, 0) + 1
+                        self.root.after(0, lambda it=best: self._create_popup(it))
+                        cnt = self._today_popup_counts[key]
+                        self._tray_status = f"Pop: {best['keyword']}" + (f" (#{cnt})" if cnt > 1 else "")
+                        self.root.after(8000, self._clear_tray_status)
+                    else:
+                        self._batch_review_mode = False
+                elif self.active_popups:
+                    self._tray_status = tr("notifier.queued").format(n=len(candidates))
                     self.root.after(10000, self._clear_tray_status)
-                    return
-                key = (best["subject"], best["chapter"], best["keyword"])
-                self._active_item_keys.add(key)
-                self._today_popup_counts[key] = self._today_popup_counts.get(key, 0) + 1
-                self.root.after(0, lambda it=best: self._create_popup(it))
-                cnt = self._today_popup_counts[key]
-                self._tray_status = f"正在弹出: {best['keyword']}" + (f" (今日第{cnt}次)" if cnt > 1 else "")
-                self.root.after(8000, self._clear_tray_status)
-                pass  # balloon notification removed
+                else:
+                    self.root.after(0, lambda c=candidates: self._show_review_prompt(c))
             else:
-                self._tray_status = "暂无到期卡片" if not items else f"找到 {len(items)} 条待复习"
+                self._batch_review_mode = False
+                self._tray_status = tr("notifier.no_due") if not items else tr("notifier.found_due").format(n=len(items))
                 self.root.after(10000, self._clear_tray_status)
         except Exception:
             import traceback
@@ -235,10 +246,89 @@ class Notifier:
 
         return max(items, key=score)
 
+    def _show_review_prompt(self, candidates):
+        dialog = tk.Toplevel(self.root)
+        dialog.title(tr("notifier.due_title"))
+        dialog.geometry("420x320")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.focus_set()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        dialog.geometry(f"+{(sw-420)//2}+{(sh-320)//2}")
+
+        header = tk.Frame(dialog, bg="#3498db", height=60)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        tk.Label(header, text="📚 " + tr("notifier.due_title"), font=("Microsoft YaHei", 14, "bold"),
+                 fg="white", bg="#3498db").pack(expand=True)
+
+        body = tk.Frame(dialog, bg="#fafafa")
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=12)
+
+        tk.Label(body, text=tr("notifier.due_count_msg").format(n=len(candidates)),
+                 font=("Microsoft YaHei", 12), fg="#2c3e50", bg="#fafafa",
+                 anchor=tk.W).pack(fill=tk.X, pady=(0, 12))
+
+        def start_review():
+            dialog.destroy()
+            self._batch_review_mode = True
+            self._check_now()
+
+        def snooze_minutes(mins):
+            delay = mins * 60
+            now = time.time()
+            for item in candidates:
+                key = (item["subject"], item["chapter"], item["keyword"])
+                self._snoozed_until[key] = now + delay
+            dialog.destroy()
+            self.root.after(delay * 1000, self._check_now)
+
+        def snooze_today():
+            for item in candidates:
+                key = (item["subject"], item["chapter"], item["keyword"])
+                self.suppressed_items.add(key)
+            dialog.destroy()
+
+        btn_review = tk.Button(body, text=tr("notifier.review_now"), font=("Microsoft YaHei", 11, "bold"),
+                               bg="#27ae60", fg="white", relief=tk.FLAT,
+                               padx=24, pady=6, cursor="hand2", command=start_review)
+        btn_review.pack(pady=(0, 10))
+
+        tk.Label(body, text=tr("notifier.snooze_label"), font=("Microsoft YaHei", 9, "bold"),
+                 fg="#555", bg="#fafafa", anchor=tk.W).pack(fill=tk.X)
+
+        btn_row = tk.Frame(body, bg="#fafafa")
+        btn_row.pack(fill=tk.X, pady=(4, 6))
+        for mins, key in [(5, "notifier.snooze_5min"), (15, "notifier.snooze_15min"),
+                          (30, "notifier.snooze_30min"), (60, "notifier.snooze_1hour")]:
+            tk.Button(btn_row, text=tr(key), font=("Microsoft YaHei", 9),
+                      bg="#ecf0f1", fg="#555", relief=tk.FLAT, padx=10, pady=4,
+                      cursor="hand2",
+                      command=lambda m=mins: snooze_minutes(m)).pack(side=tk.LEFT, padx=2)
+
+        custom_row = tk.Frame(body, bg="#fafafa")
+        custom_row.pack(fill=tk.X, pady=(4, 6))
+        tk.Label(custom_row, text=tr("notifier.snooze_custom") + ":", font=("Microsoft YaHei", 9),
+                 fg="#888", bg="#fafafa").pack(side=tk.LEFT, padx=(0, 4))
+        spinbox = tk.Spinbox(custom_row, from_=1, to=120, width=4,
+                             font=("Microsoft YaHei", 9), justify=tk.CENTER)
+        spinbox.pack(side=tk.LEFT)
+        tk.Label(custom_row, text=tr("notifier.snooze_hint"), font=("Microsoft YaHei", 9),
+                 fg="#888", bg="#fafafa").pack(side=tk.LEFT, padx=4)
+        tk.Button(custom_row, text=tr("notifier.snooze_btn"), font=("Microsoft YaHei", 9),
+                  bg="#3498db", fg="white", relief=tk.FLAT, padx=10, pady=2,
+                  cursor="hand2",
+                  command=lambda: snooze_minutes(int(spinbox.get()))).pack(side=tk.LEFT, padx=4)
+
+        tk.Button(body, text=tr("notifier.snooze_today"), font=("Microsoft YaHei", 9),
+                  bg="#e74c3c", fg="white", relief=tk.FLAT, padx=16, pady=4,
+                  cursor="hand2", command=snooze_today).pack(pady=(4, 0))
+
     def _show_balloon(self, msg):
         if self._tray_icon:
             try:
-                self._tray_icon.notify(msg, "知识提醒")
+                self._tray_icon.notify(msg, tr("app.name"))
             except Exception:
                 pass
 
@@ -294,12 +384,14 @@ class Notifier:
     def _show_stats(self):
         try:
             stats = self.db.get_stats()
-            labels = {0: "陌生", 1: "陌生", 2: "熟悉", 3: "熟悉", 4: "熟记", 5: "熟记"}
-            parts = [f"{labels[lv]}({stats['by_level'].get(lv, 0)})" for lv in range(6) if stats['by_level'].get(lv, 0) > 0]
-            msg = f"总知识卡片: {stats['total']}\n"
-            msg += "掌握分布: " + ", ".join(parts) if parts else "暂无数据"
+            from memory import get_level_label
+            parts = [f"{get_level_label(lv)}({stats['by_level'].get(lv, 0)})"
+                     for lv in range(6) if stats['by_level'].get(lv, 0) > 0]
+            keys = ["notifier.stats_total", "notifier.stats_dist"]
+            msg = tr("notifier.stats_total").format(n=stats['total']) + "\n"
+            msg += tr("notifier.stats_dist") + ": " + (", ".join(parts) if parts else tr("notifier.no_data"))
             from tkinter import messagebox
-            messagebox.showinfo("知识统计", msg)
+            messagebox.showinfo(tr("notifier.stats"), msg)
         except Exception:
             pass
 
