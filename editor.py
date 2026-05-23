@@ -2210,6 +2210,7 @@ class EditorWindow:
         tk.Button(dialog, text=tr("app.confirm"), font=("Microsoft YaHei", 10),
                   command=confirm).pack(pady=(8, 10))
         dialog.bind("<Return>", lambda e: confirm())
+        lb.bind("<Double-Button-1>", lambda e: confirm())
         lb.select_set(0)
         dialog.focus_set()
         self._center_dialog(dialog, 420, 280)
