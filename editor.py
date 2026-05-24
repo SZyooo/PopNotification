@@ -2229,9 +2229,12 @@ class EditorWindow:
                     self.knowledge_text.insert("1.0", updated.strip())
                     self._dirty = True
                 if self.current_subject and self.current_chapter and self.current_keyword:
+                    data = self.db.get_keyword_data(
+                        self.current_subject, self.current_chapter, self.current_keyword)
+                    ktype = data.get("type", "normal") if data else "normal"
                     self.db.save_keyword(
                         self.current_subject, self.current_chapter, self.current_keyword,
-                        updated.strip(), self.current_type
+                        updated.strip(), ktype
                     )
             self._nav_visit()
             self._nav_ignore = True
