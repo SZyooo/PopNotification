@@ -2197,16 +2197,7 @@ class EditorWindow:
                 return
             subj, ch, _ = candidates[sel[0]]
             dialog.destroy()
-            self._rewrite_link(link_text, tag, subj, ch, keyword)
-            if self.current_subject and self.current_chapter and self.current_keyword:
-                current_text = self.knowledge_text.get("1.0", tk.END).strip()
-                self.db.save_keyword(
-                    self.current_subject, self.current_chapter, self.current_keyword,
-                    current_text, self.current_type
-                )
-            self._nav_visit()
-            self._nav_ignore = True
-            self._select_keyword_in_tree(keyword, subj, ch)
+            self.root.after(50, lambda: self._finish_rewrite(link_text, tag, subj, ch, keyword))
         tk.Button(dialog, text=tr("app.confirm"), font=("Microsoft YaHei", 10),
                   command=confirm).pack(pady=(8, 10))
         dialog.bind("<Return>", lambda e: confirm())
@@ -2215,25 +2206,37 @@ class EditorWindow:
         dialog.focus_set()
         self._center_dialog(dialog, 420, 280)
 
-    def _rewrite_link(self, old_link_text, tag, subject, chapter, keyword):
+    def _finish_rewrite(self, link_text, tag, subject, chapter, keyword):
         import re
-        full = self.knowledge_text.get("1.0", tk.END)
-        m = re.match(r'\[\[(?:[^:\]|]+::[^:\]|]+::)?([^\]|]+)(?:\|([^\]]+))?\]\]', old_link_text)
-        display = m.group(2) or m.group(1) if m else keyword
-        new_link = f"[[{subject}::{chapter}::{keyword}|{display}]]"
-        updated = full.replace(old_link_text, new_link, 1)
-        if updated == full:
-            return
-        was_disabled = self.knowledge_text.cget("state") == tk.DISABLED
-        if was_disabled:
-            self.knowledge_text.config(state=tk.NORMAL)
-        self.knowledge_text.delete("1.0", tk.END)
-        self.knowledge_text.insert("1.0", updated)
-        if was_disabled:
-            self._raw_knowledge = updated.strip()
-            self.knowledge_text.config(state=tk.DISABLED)
-        else:
-            self._dirty = True
+        try:
+            full = self.knowledge_text.get("1.0", tk.END)
+            m = re.match(r'\[\[(?:[^:\]|]+::[^:\]|]+::)?([^\]|]+)(?:\|([^\]]+))?\]\]', link_text)
+            display = m.group(2) or m.group(1) if m else keyword
+            new_link = f"[[{subject}::{chapter}::{keyword}|{display}]]"
+            updated = full.replace(link_text, new_link, 1)
+            if updated != full:
+                was_disabled = self.knowledge_text.cget("state") == tk.DISABLED
+                if was_disabled:
+                    self.knowledge_text.config(state=tk.NORMAL)
+                self.knowledge_text.delete("1.0", tk.END)
+                self.knowledge_text.insert("1.0", updated)
+                if was_disabled:
+                    self._raw_knowledge = updated.strip()
+                    self.knowledge_text.config(state=tk.DISABLED)
+                else:
+                    self._dirty = True
+                if self.current_subject and self.current_chapter and self.current_keyword:
+                    self.db.save_keyword(
+                        self.current_subject, self.current_chapter, self.current_keyword,
+                        updated.strip(), self.current_type
+                    )
+            self._nav_visit()
+            self._nav_ignore = True
+            self._select_keyword_in_tree(keyword, subject, chapter)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror(tr("app.error"), str(e))
 
     def _refresh_primary_subjects(self):
         from config import load_config
