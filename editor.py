@@ -2197,7 +2197,7 @@ class EditorWindow:
                 return
             subj, ch, _ = candidates[sel[0]]
             dialog.destroy()
-            self.root.after(50, lambda: self._finish_rewrite(link_text, tag, subj, ch, keyword))
+            self._finish_rewrite(link_text, tag, subj, ch, keyword)
         tk.Button(dialog, text=tr("app.confirm"), font=("Microsoft YaHei", 10),
                   command=confirm).pack(pady=(8, 10))
         dialog.bind("<Return>", lambda e: confirm())
@@ -2209,21 +2209,24 @@ class EditorWindow:
     def _finish_rewrite(self, link_text, tag, subject, chapter, keyword):
         import re
         try:
-            full = self.knowledge_text.get("1.0", tk.END)
+            full = self._raw_knowledge if self._read_mode else self.knowledge_text.get("1.0", tk.END)
             m = re.match(r'\[\[(?:[^:\]|]+::[^:\]|]+::)?([^\]|]+)(?:\|([^\]]+))?\]\]', link_text)
             display = m.group(2) or m.group(1) if m else keyword
             new_link = f"[[{subject}::{chapter}::{keyword}|{display}]]"
             updated = full.replace(link_text, new_link, 1)
             if updated != full:
-                was_disabled = self.knowledge_text.cget("state") == tk.DISABLED
-                if was_disabled:
-                    self.knowledge_text.config(state=tk.NORMAL)
-                self.knowledge_text.delete("1.0", tk.END)
-                self.knowledge_text.insert("1.0", updated)
-                if was_disabled:
+                if self._read_mode:
                     self._raw_knowledge = updated.strip()
-                    self.knowledge_text.config(state=tk.DISABLED)
+                    was_disabled = self.knowledge_text.cget("state") == tk.DISABLED
+                    if was_disabled:
+                        self.knowledge_text.config(state=tk.NORMAL)
+                    self.knowledge_text.delete("1.0", tk.END)
+                    self.knowledge_text.insert("1.0", updated.strip())
+                    if was_disabled:
+                        self.knowledge_text.config(state=tk.DISABLED)
                 else:
+                    self.knowledge_text.delete("1.0", tk.END)
+                    self.knowledge_text.insert("1.0", updated.strip())
                     self._dirty = True
                 if self.current_subject and self.current_chapter and self.current_keyword:
                     self.db.save_keyword(
@@ -2236,7 +2239,10 @@ class EditorWindow:
         except Exception as e:
             import traceback
             traceback.print_exc()
-            messagebox.showerror(tr("app.error"), str(e))
+            try:
+                messagebox.showerror(tr("app.error"), str(e))
+            except Exception:
+                pass
 
     def _refresh_primary_subjects(self):
         from config import load_config
